@@ -1,5 +1,5 @@
-//! Layered full-screen overlay (Windows). Phase C1: GDI + `UpdateLayeredWindow`; later milestones
-//! switch to D2D/DComp.
+//! Layered full-screen overlay (Windows). Phase C2: Direct2D + DirectComposition on a DXGI swap
+//! chain bound to the overlay HWND.
 
 #![cfg_attr(windows, allow(unsafe_op_in_unsafe_fn))]
 
@@ -7,11 +7,13 @@ mod error;
 pub use error::RenderError;
 
 #[cfg(windows)]
-mod device;
+mod d2d;
 #[cfg(windows)]
 mod monitors;
 #[cfg(windows)]
 mod overlay;
+#[cfg(windows)]
+mod scene;
 
 #[cfg(windows)]
 use std::thread::JoinHandle;
@@ -43,11 +45,14 @@ impl Renderer {
         })
     }
 
-    /// Shows the overlay for `session_id`. `hints` are accepted for API stability; C1 only draws
-    /// the DPI sanity marker (see `04-build-order.md`).
-    pub fn show(&self, session_id: u64, _hints: &[Hint]) -> Result<(), RenderError> {
+    /// Shows the overlay for `session_id`. `hints` are copied to the worker; C2 draws the demo
+    /// pill strip (see `04-build-order.md`); C3 will use real bounds.
+    pub fn show(&self, session_id: u64, hints: &[Hint]) -> Result<(), RenderError> {
         self.cmd
-            .send(overlay::RenderCmd::Show { session_id })
+            .send(overlay::RenderCmd::Show {
+                session_id,
+                hints: hints.to_vec(),
+            })
             .map_err(|_| RenderError::Disconnected)
     }
 

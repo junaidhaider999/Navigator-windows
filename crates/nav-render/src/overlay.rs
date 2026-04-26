@@ -1,36 +1,33 @@
-//! Layered popup covering the primary monitor (C1).
+//! Layered popup covering the primary monitor (C2: D2D + DirectComposition).
 
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, select, tick};
+use nav_core::Hint;
 use windows::Win32::Foundation::{
-    COLORREF, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM,
+    HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, RPC_E_CHANGED_MODE, WPARAM,
 };
-use windows::Win32::Graphics::Gdi::{HBITMAP, HDC, HGDIOBJ};
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     HWND_TOPMOST, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassExW, SW_HIDE,
     SW_SHOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetWindowPos, ShowWindow, TranslateMessage,
-    ULW_ALPHA, UnregisterClassW, UpdateLayeredWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DESTROY,
-    WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    UnregisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DESTROY, WNDCLASS_STYLES, WNDCLASSEXW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
-use windows::Win32::Graphics::Gdi::{AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION};
-
 use crate::RenderError;
-use crate::device::{create_layer_dc, destroy_layer_dc};
+use crate::d2d::D2dCompositionRenderer;
 use crate::monitors::primary_monitor_rect;
 
-const CLASS_NAME: PCWSTR = w!("Navigator.RenderOverlay.C1");
+const CLASS_NAME: PCWSTR = w!("Navigator.RenderOverlay.C2");
 
-/// `session_id` is forwarded from the app for future staleness checks; C1 only toggles visibility.
-#[allow(dead_code)]
 pub(crate) enum RenderCmd {
-    Show { session_id: u64 },
+    Show { session_id: u64, hints: Vec<Hint> },
     Hide { session_id: u64 },
     Shutdown,
 }
@@ -51,28 +48,56 @@ unsafe extern "system" fn overlay_wndproc(
 }
 
 pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
+    let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    if hr.is_err() && hr != RPC_E_CHANGED_MODE {
+        eprintln!("[render] CoInitializeEx: {hr:?}");
+        return;
+    }
+
     let ticker = tick(Duration::from_millis(32));
     let mut hwnd: Option<HWND> = None;
     let mut visible = false;
-    let mut mem_dc: Option<HDC> = None;
-    let mut dib: Option<HBITMAP> = None;
-    let mut old_gdi: Option<HGDIOBJ> = None;
     let mut instance: Option<HINSTANCE> = None;
+    let mut gpu: Option<D2dCompositionRenderer> = None;
+    // Highest session_id accepted from RenderCmd::Show (app uses monotonic ids).
+    let mut max_show_accepted: u64 = 0;
+    // Session id currently shown on the swap chain, if any.
+    let mut displayed_session: Option<u64> = None;
+    let mut pending_hints: Vec<Hint> = Vec::new();
 
     'outer: loop {
         select! {
             recv(cmd_rx) -> cmd => {
                 match cmd {
-                    Ok(RenderCmd::Show { session_id: _ }) => {
-                        if let Err(e) = unsafe { show_overlay(&mut hwnd, &mut instance, &mut mem_dc, &mut dib, &mut old_gdi, &mut visible) } {
-                            eprintln!("[render] show failed: {e}");
+                    Ok(RenderCmd::Show { session_id, hints }) => {
+                        if session_id <= max_show_accepted {
+                            continue;
+                        }
+                        match unsafe {
+                            show_overlay(
+                                &mut hwnd,
+                                &mut instance,
+                                &mut gpu,
+                                &mut visible,
+                                &hints,
+                            )
+                        } {
+                            Ok(()) => {
+                                max_show_accepted = session_id;
+                                displayed_session = Some(session_id);
+                                pending_hints = hints;
+                            }
+                            Err(e) => eprintln!("[render] show failed: {e}"),
                         }
                     }
-                    Ok(RenderCmd::Hide { session_id: _ }) => {
-                        unsafe { hide_overlay(&mut hwnd, &mut mem_dc, &mut dib, &mut old_gdi, &mut visible) };
+                    Ok(RenderCmd::Hide { session_id }) => {
+                        if displayed_session != Some(session_id) {
+                            continue;
+                        }
+                        unsafe { hide_overlay(&mut hwnd, &mut gpu, &mut visible, &mut displayed_session) };
                     }
                     Ok(RenderCmd::Shutdown) | Err(_) => {
-                        unsafe { hide_overlay(&mut hwnd, &mut mem_dc, &mut dib, &mut old_gdi, &mut visible) };
+                        unsafe { hide_overlay(&mut hwnd, &mut gpu, &mut visible, &mut displayed_session) };
                         if let (Some(h), Some(inst)) = (hwnd.take(), instance.take()) {
                             unsafe {
                                 let _ = DestroyWindow(h);
@@ -90,12 +115,21 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                 if let Some(h) = hwnd {
                     unsafe { pump_messages(h) };
                     if visible && escape_pressed() {
-                        unsafe { hide_overlay(&mut hwnd, &mut mem_dc, &mut dib, &mut old_gdi, &mut visible) };
+                        unsafe { hide_overlay(&mut hwnd, &mut gpu, &mut visible, &mut displayed_session) };
+                    }
+                    if visible {
+                        if let Some(ref mut g) = gpu {
+                            if let Err(e) = unsafe { g.update_and_present(&pending_hints) } {
+                                eprintln!("[render] frame: {e}");
+                            }
+                        }
                     }
                 }
             }
         }
     }
+
+    unsafe { CoUninitialize() };
 }
 
 fn escape_pressed() -> bool {
@@ -120,34 +154,16 @@ fn pump_all_thread_messages() {
     }
 }
 
-unsafe fn release_layer(
-    mem_dc: &mut Option<HDC>,
-    dib: &mut Option<HBITMAP>,
-    old_gdi: &mut Option<HGDIOBJ>,
-) {
-    if let (Some(dc), Some(bmp), Some(old)) = (mem_dc.take(), dib.take(), old_gdi.take()) {
-        destroy_layer_dc(dc, bmp, old);
-    }
-}
-
 unsafe fn show_overlay(
     hwnd_slot: &mut Option<HWND>,
     instance_slot: &mut Option<HINSTANCE>,
-    mem_dc: &mut Option<HDC>,
-    dib: &mut Option<HBITMAP>,
-    old_gdi: &mut Option<HGDIOBJ>,
+    gpu: &mut Option<D2dCompositionRenderer>,
     visible: &mut bool,
+    hints: &[Hint],
 ) -> Result<(), RenderError> {
-    release_layer(mem_dc, dib, old_gdi);
-
     let area = primary_monitor_rect()?;
     let w = area.right - area.left;
     let h = area.bottom - area.top;
-
-    let (dc, bmp, old) = create_layer_dc(area)?;
-    *mem_dc = Some(dc);
-    *dib = Some(bmp);
-    *old_gdi = Some(old);
 
     let module: HMODULE = GetModuleHandleW(None).map_err(|e| RenderError::Win32(e.to_string()))?;
     let inst: HINSTANCE = module.into();
@@ -166,7 +182,6 @@ unsafe fn show_overlay(
         };
         let atom = RegisterClassExW(&wc);
         if atom == 0 {
-            release_layer(mem_dc, dib, old_gdi);
             let err = windows::Win32::Foundation::GetLastError();
             return Err(RenderError::Win32(format!(
                 "RegisterClassExW failed: {err:?}"
@@ -196,10 +211,7 @@ unsafe fn show_overlay(
             Some(inst),
             None,
         )
-        .map_err(|e| {
-            release_layer(mem_dc, dib, old_gdi);
-            RenderError::Win32(e.to_string())
-        })?;
+        .map_err(|e| RenderError::Win32(e.to_string()))?;
 
         *hwnd_slot = Some(hwnd);
         hwnd
@@ -216,36 +228,10 @@ unsafe fn show_overlay(
     )
     .map_err(|e| RenderError::Win32(e.to_string()))?;
 
-    let blend = BLENDFUNCTION {
-        BlendOp: AC_SRC_OVER as u8,
-        BlendFlags: 0,
-        SourceConstantAlpha: 255,
-        AlphaFormat: AC_SRC_ALPHA as u8,
-    };
-
-    let dst_pt = POINT {
-        x: area.left,
-        y: area.top,
-    };
-    let size = SIZE { cx: w, cy: h };
-    let src_pt = POINT { x: 0, y: 0 };
-
-    let mdc = mem_dc
-        .as_ref()
-        .ok_or_else(|| RenderError::Win32("internal: missing mem DC".into()))?;
-
-    UpdateLayeredWindow(
-        hwnd,
-        None,
-        Some(&dst_pt),
-        Some(&size),
-        Some(*mdc),
-        Some(&src_pt),
-        COLORREF(0),
-        Some(&blend),
-        ULW_ALPHA,
-    )
-    .map_err(|e| RenderError::Win32(e.to_string()))?;
+    *gpu = Some(D2dCompositionRenderer::new(hwnd)?);
+    if let Some(ref mut g) = *gpu {
+        g.update_and_present(hints)?;
+    }
 
     let _ = ShowWindow(hwnd, SW_SHOW);
     *visible = true;
@@ -254,14 +240,14 @@ unsafe fn show_overlay(
 
 unsafe fn hide_overlay(
     hwnd_slot: &mut Option<HWND>,
-    mem_dc: &mut Option<HDC>,
-    dib: &mut Option<HBITMAP>,
-    old_gdi: &mut Option<HGDIOBJ>,
+    gpu: &mut Option<D2dCompositionRenderer>,
     visible: &mut bool,
+    displayed_session: &mut Option<u64>,
 ) {
     *visible = false;
+    *displayed_session = None;
+    *gpu = None;
     if let Some(h) = *hwnd_slot {
         let _ = ShowWindow(h, SW_HIDE);
     }
-    release_layer(mem_dc, dib, old_gdi);
 }
