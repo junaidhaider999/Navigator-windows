@@ -85,7 +85,7 @@ impl UiaRuntime {
 
     /// Pattern dispatch: `Invoke` on the element located at the same `FindAll` index as enumeration.
     pub fn invoke(&self, hwnd: UiaHwnd, hint: &Hint) -> Result<(), UiaError> {
-        invoke_invoke_pattern(&self.automation, hwnd, hint)
+        invoke_invoke_pattern(&self.automation, hwnd, hint, &self.enum_cache)
     }
 }
 

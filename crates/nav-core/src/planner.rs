@@ -19,6 +19,8 @@ const W_SIZE: f32 = 0.2;
 /// use nav_core::{plan, RawHint, Rect, ElementKind, Backend};
 /// let raw = RawHint {
 ///     element_id: 1,
+///     uia_invoke_hwnd: None,
+///     uia_child_index: None,
 ///     bounds: Rect { x: 0, y: 0, w: 50, h: 20 },
 ///     kind: ElementKind::Invoke,
 ///     name: None,

@@ -14,6 +14,8 @@ use nav_core::{Backend, ElementKind, RawHint, Rect, Session, SessionEvent, plan}
 fn one_hint_session() -> Session {
     let raw = RawHint {
         element_id: 1,
+        uia_invoke_hwnd: None,
+        uia_child_index: None,
         bounds: Rect {
             x: 0,
             y: 0,

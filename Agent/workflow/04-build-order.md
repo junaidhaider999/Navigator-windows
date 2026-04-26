@@ -203,6 +203,13 @@ shippable in *concept* at this point.
 
 - **Goal:** cut wall time on giant trees.
 - **Touches:** `nav-uia/enumerate.rs` with rayon.
+- **Implemented:** `FindAllBuildCache(Descendants).Length() ≥ 256`, root has `> 1`
+  child, and **≥ 2** distinct `CurrentNativeWindowHandle` values (excluding the
+  root HWND) → Rayon enumerates each HWND subtree on a **per-thread STA** worker
+  with its own `IUIAutomation` + cache; non-HWND children merge on the main
+  thread via `FindAllBuildCache` from the child element; `RawHint` carries
+  `uia_invoke_hwnd` / `uia_child_index`; invoke uses `FindAllBuildCache` +
+  `GetCachedPattern(Invoke)` with the same cache request.
 - **Done when:**
   - For trees < 256 elements: keep the synchronous path (parallelism cost
     > benefit).

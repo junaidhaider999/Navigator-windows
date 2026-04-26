@@ -17,6 +17,14 @@ pub struct HintId(pub u32);
 #[derive(Clone, Debug, PartialEq)]
 pub struct RawHint {
     pub element_id: u64,
+    /// When [`Backend::Uia`](Backend::Uia), optional native window used as the root for invoke:
+    /// `element_id` indexes `FindAllBuildCache(TreeScope_Descendants)` from this HWND (parallel
+    /// subtree enumeration). When `None`, invoke uses the session root HWND from the orchestrator.
+    pub uia_invoke_hwnd: Option<usize>,
+    /// When [`Backend::Uia`](Backend::Uia) and `uia_invoke_hwnd` is `None`, optional direct-child
+    /// index of the session root: invoke resolves `root.FindAllBuildCache(Children).GetElement(j)`
+    /// then `FindAllBuildCache(Descendants).GetElement(element_id)`.
+    pub uia_child_index: Option<u32>,
     pub bounds: Rect,
     pub kind: ElementKind,
     pub name: Option<Box<str>>,

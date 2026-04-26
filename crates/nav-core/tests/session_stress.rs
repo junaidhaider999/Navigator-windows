@@ -7,6 +7,8 @@ fn sample_session(n: usize) -> Session {
     for i in 0..n {
         raws.push(RawHint {
             element_id: i as u64,
+            uia_invoke_hwnd: None,
+            uia_child_index: None,
             bounds: Rect {
                 x: (i as i32) * 8,
                 y: 0,

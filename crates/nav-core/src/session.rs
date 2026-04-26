@@ -15,6 +15,8 @@ use crate::hint::{Hint, HintId};
 /// let h = Hint {
 ///     raw: RawHint {
 ///         element_id: 1,
+///         uia_invoke_hwnd: None,
+///         uia_child_index: None,
 ///         bounds: Rect { x: 0, y: 0, w: 1, h: 1 },
 ///         kind: ElementKind::Invoke,
 ///         name: None,

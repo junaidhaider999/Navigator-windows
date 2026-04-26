@@ -5,6 +5,8 @@ use nav_core::{Backend, ElementKind, Hint, RawHint, Rect, Session, SessionEvent,
 fn raw_at(i: u64, x: i32) -> RawHint {
     RawHint {
         element_id: i,
+        uia_invoke_hwnd: None,
+        uia_child_index: None,
         bounds: Rect {
             x,
             y: 0,

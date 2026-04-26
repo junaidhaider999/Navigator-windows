@@ -600,6 +600,7 @@ name = "nav-uia"
 version = "0.1.0"
 dependencies = [
  "nav-core",
+ "rayon",
  "thiserror",
  "windows",
 ]
