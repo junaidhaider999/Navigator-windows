@@ -21,7 +21,9 @@
 ['s', 'a', 'd', 'f', 'j', 'k', 'l', 'e', 'w', 'c', 'm', 'p', 'g', 'h']
 ```
 
-14 characters. Same as legacy HAP. Properties:
+14 characters. Same as legacy HAP. The **`navigator`** binary currently embeds
+this alphabet as a `Vec<char>` for `nav-core::plan` (until `nav-config` exists).
+Properties:
 
 - All home-row first (`s a d f j k l`), then near-row.
 - All ASCII, all unambiguous on a US-QWERTY keyboard.

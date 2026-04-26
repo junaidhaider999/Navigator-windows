@@ -11,6 +11,7 @@ use windows::Win32::UI::Accessibility::{CUIAutomation, CUIAutomation8, IUIAutoma
 use crate::UiaError;
 use crate::enumerate::enumerate_baseline;
 use crate::hwnd::UiaHwnd;
+use crate::invoke::invoke_invoke_pattern;
 use crate::options::{EnumOptions, FallbackPolicy};
 
 /// UI Automation client (B3 baseline: no cache, no overlay).
@@ -67,9 +68,9 @@ impl UiaRuntime {
         enumerate_baseline(&self.automation, hwnd, opts)
     }
 
-    /// Pattern dispatch (not implemented in B3).
-    pub fn invoke(&self, _hint: &Hint) -> Result<(), UiaError> {
-        Err(UiaError::InvokeNotImplemented)
+    /// Pattern dispatch: `Invoke` on the element located at the same `FindAll` index as enumeration.
+    pub fn invoke(&self, hwnd: UiaHwnd, hint: &Hint) -> Result<(), UiaError> {
+        invoke_invoke_pattern(&self.automation, hwnd, hint)
     }
 }
 

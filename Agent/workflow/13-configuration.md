@@ -4,6 +4,10 @@
 > decision the user must make and a code path we must keep working.
 > **Bias hard toward sensible defaults.**
 
+**Repo state:** there is no `nav-config` crate yet; the running **`navigator`**
+binary uses compile-time defaults (e.g. alphabet in `nav-app`). The sections
+below remain the **target** design for **M10**.
+
 ## Principles
 
 1. **Single file**, TOML, human-readable.

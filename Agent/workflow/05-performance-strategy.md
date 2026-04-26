@@ -3,6 +3,10 @@
 > The product is latency. This document is where the milliseconds come from
 > and how we keep them.
 
+**Today:** uncached UIA enumeration still dominates end-to-end latency (often
+**100–400 ms+** on large trees). **M6 / Phase D** is where we claw that back
+with `IUIAutomationCacheRequest` and related work (`04-build-order.md`).
+
 ## Where the time goes (legacy HAP, instrumented)
 
 Profiled HAP on a stock Win11 desktop pressing `Alt+;` over Visual Studio:

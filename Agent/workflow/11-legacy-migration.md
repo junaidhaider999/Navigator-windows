@@ -164,7 +164,7 @@ for progress.
 git clone <this repo>
 cd navigator
 cargo build --workspace --release
-.\target\release\nav-app.exe
+.\target\release\navigator.exe
 ```
 
 Then press `Alt+;` over any focused window.

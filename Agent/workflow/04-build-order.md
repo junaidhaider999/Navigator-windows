@@ -152,6 +152,21 @@ the log. No overlay yet.
 Demo: open Notepad, hit `Alt+;`, type two letters, the menu opens. We are
 shippable in *concept* at this point.
 
+### Phase C — implementation notes (repo state)
+
+- **C1–C3** are implemented in `crates/nav-render`, `nav-input`, `nav-uia`,
+  `nav-app`, and `nav-core` (orchestration currently in `nav-app/src/main.rs`).
+- **Esc** cancels the session in the app (hint-mode LL hook + `Session::cancel`);
+  the render thread no longer polls Esc independently.
+- **Overlay DXGI:** layered popups use **`IDXGIFactory2::CreateSwapChainForComposition`**
+  (not `CreateSwapChainForHwnd`) plus DComp `CreateTargetForHwnd`, after
+  **`SetLayeredWindowAttributes(..., LWA_ALPHA)`**. **`WS_EX_NOREDIRECTIONBITMAP`**
+  is **omitted** here because it caused `DXGI_ERROR_INVALID_CALL` on common
+  stacks with flip-model swap chains; see **ADR-0015** in `14-risks-and-decisions.md`.
+- **Hint labels** are assigned by `nav-core::plan` (alphabet
+  `sadfjklewcmpgh` in the app today); the doc “type `aa`” example is illustrative
+  only — use the two-letter label shown on each pill.
+
 ---
 
 ## Phase D — Make it fast

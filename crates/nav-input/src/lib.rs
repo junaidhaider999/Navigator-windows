@@ -30,10 +30,19 @@ pub struct HotkeyPress {
     pub latency_us: u64,
 }
 
-/// Events from the input worker (hotkeys today; hint-mode keys later).
+/// Keystrokes delivered while hint mode is active (low-level hook; see C3 in `04-build-order.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionKey {
+    Char(char),
+    Escape,
+    Backspace,
+}
+
+/// Events from the input worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputEvent {
     Hotkey(HotkeyPress),
+    SessionKey(SessionKey),
 }
 
 #[derive(Debug, thiserror::Error)]

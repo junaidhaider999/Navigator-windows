@@ -547,6 +547,7 @@ name = "nav-app"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "nav-core",
  "nav-input",
  "nav-render",
  "nav-uia",

@@ -12,6 +12,7 @@ name = "navigator"
 path = "src/main.rs"
 
 [dependencies]
+nav-core = { workspace = true }
 nav-input = { workspace = true }
 nav-uia = { workspace = true }
 clap = { workspace = true }

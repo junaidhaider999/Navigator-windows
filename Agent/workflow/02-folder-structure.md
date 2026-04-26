@@ -8,7 +8,7 @@ navigator/
 │   └── workflow/                   # Read README.md first
 ├── crates/                         # All Rust crates live here
 │   ├── nav-core/                   # Pure logic. No Win32. Cross-platform testable.
-│   ├── nav-config/                 # Config file + CLI parsing.
+│   ├── nav-config/                 # Config file + CLI parsing (planned; not in repo yet).
 │   ├── nav-uia/                    # UI Automation enumerator + invoker.
 │   ├── nav-input/                  # Hotkey + low-level keyboard hook.
 │   ├── nav-render/                 # Layered window + Direct2D/DComp overlay.

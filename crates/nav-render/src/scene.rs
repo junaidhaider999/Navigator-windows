@@ -1,6 +1,4 @@
-//! Layout and drawing for overlay “hint pills”. C2: five hard-coded demo hints (`aa`…`ae`).
-//! C3 will map [`nav_core::Hint`] bounds into client space; until then the demo strip is used
-//! regardless of `hints` (see `04-build-order.md`).
+//! Layout and drawing for overlay “hint pills” (C3: real [`nav_core::Hint`] bounds → client DIPs).
 
 #![allow(clippy::too_many_arguments)]
 
@@ -24,34 +22,52 @@ pub struct PillGeom {
     pub label: String,
 }
 
-const DEMO_LABELS: [&str; 5] = ["aa", "ab", "ac", "ad", "ae"];
+const MIN_PILL_W: f32 = 72.0;
+const MIN_PILL_H: f32 = 28.0;
+const MAX_PILL_W: f32 = 200.0;
+const MAX_PILL_H: f32 = 80.0;
 
-/// Builds pill geometry for the current frame (C2 demo strip).
-pub fn pills_for_frame(_hints: &[Hint], client_w: f32, client_h: f32) -> Vec<PillGeom> {
-    c2_demo_pills(client_w, client_h)
-}
-
-fn c2_demo_pills(client_w: f32, client_h: f32) -> Vec<PillGeom> {
-    let pill_w = 88.0f32;
-    let pill_h = 36.0f32;
-    let gap = 12.0f32;
-    let total_w = 5.0 * pill_w + 4.0 * gap;
-    let start_x = ((client_w - total_w).max(0.0)) * 0.5;
-    let y = client_h * 0.18;
-
-    DEMO_LABELS
-        .iter()
-        .enumerate()
-        .map(|(i, lab)| PillGeom {
-            rect: D2D_RECT_F {
-                left: start_x + i as f32 * (pill_w + gap),
-                top: y,
-                right: start_x + i as f32 * (pill_w + gap) + pill_w,
-                bottom: y + pill_h,
-            },
-            label: (*lab).to_string(),
-        })
-        .collect()
+/// `overlay_origin_phys` is the overlay HWND top-left in physical screen pixels (matches UIA bounds).
+pub fn pills_for_frame(
+    hints: &[Hint],
+    overlay_origin_phys: (i32, i32),
+    client_w: f32,
+    client_h: f32,
+    dpi: f32,
+) -> Vec<PillGeom> {
+    if hints.is_empty() {
+        return Vec::new();
+    }
+    let (ox, oy) = overlay_origin_phys;
+    let scale = 96.0 / dpi;
+    let mut out = Vec::with_capacity(hints.len());
+    for h in hints {
+        let left = (h.raw.bounds.x - ox) as f32 * scale;
+        let top = (h.raw.bounds.y - oy) as f32 * scale;
+        let w = h.raw.bounds.w as f32 * scale;
+        let hgt = h.raw.bounds.h as f32 * scale;
+        let cx = left + w * 0.5;
+        let cy = top + hgt * 0.5;
+        let pw = w.clamp(MIN_PILL_W, MAX_PILL_W);
+        let ph = hgt.clamp(MIN_PILL_H, MAX_PILL_H);
+        let mut rect = D2D_RECT_F {
+            left: cx - pw * 0.5,
+            top: cy - ph * 0.5,
+            right: cx + pw * 0.5,
+            bottom: cy + ph * 0.5,
+        };
+        rect.left = rect.left.max(0.0);
+        rect.top = rect.top.max(0.0);
+        rect.right = rect.right.min(client_w);
+        rect.bottom = rect.bottom.min(client_h);
+        if rect.right > rect.left && rect.bottom > rect.top {
+            out.push(PillGeom {
+                rect,
+                label: h.label.to_string(),
+            });
+        }
+    }
+    out
 }
 
 const CORNER_RADIUS: f32 = 8.0;

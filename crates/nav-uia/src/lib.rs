@@ -16,6 +16,8 @@ mod coords;
 #[cfg(windows)]
 mod enumerate;
 #[cfg(windows)]
+mod invoke;
+#[cfg(windows)]
 mod pattern;
 #[cfg(windows)]
 mod runtime;
@@ -40,8 +42,8 @@ impl UiaRuntime {
         Err(UiaError::UnsupportedPlatform)
     }
 
-    pub fn invoke(&self, _hint: &Hint) -> Result<(), UiaError> {
-        Err(UiaError::InvokeNotImplemented)
+    pub fn invoke(&self, _hwnd: UiaHwnd, _hint: &Hint) -> Result<(), UiaError> {
+        Err(UiaError::UnsupportedPlatform)
     }
 }
 

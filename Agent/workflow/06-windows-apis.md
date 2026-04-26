@@ -139,7 +139,7 @@ modern controls do not respond to synthetic messages, only to real input.
 | Swap chain for visual               | `IDXGIFactory2::CreateSwapChainForComposition`   |
 | 2D context                          | `D2D1CreateFactory` → `ID2D1Device::CreateDeviceContext` |
 | Text format                         | `DWriteCreateFactory` → `CreateTextFormat`       |
-| Layered window                      | `WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP`      |
+| Layered window                      | `WS_EX_LAYERED | …` (see **ADR-0015**; `WS_EX_NOREDIRECTIONBITMAP` omitted on MVP overlay) |
 | DPI awareness                       | `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` (declared in manifest, not at runtime) |
 
 DPI awareness is set in the **manifest**, not via API. Setting at runtime

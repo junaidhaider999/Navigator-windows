@@ -20,6 +20,11 @@ them:
 | Idle      | `RegisterHotKey` + `WM_HOTKEY`    | ~0 (kernel)    |
 | HintMode  | LL keyboard hook + RegisterHotKey | hook callback / keystroke |
 
+**Repo state:** `nav-input` installs **`WH_KEYBOARD_LL`** while `hint_mode` is
+true (`crates/nav-input/src/thread.rs`), forwarding **`SessionKey`** events on
+the same channel as **`WM_HOTKEY`**. `Alt+;` and other **Alt chords** are passed
+through so the global hotkey still fires.
+
 We never run an LL hook in Idle. Doing so would tax every keystroke globally,
 not for our benefit.
 

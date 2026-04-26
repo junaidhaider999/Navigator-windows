@@ -93,6 +93,31 @@ impl Session {
         SessionEvent::Done
     }
 
+    /// Current hint list (post-[`ingest`](Self::ingest)).
+    #[must_use]
+    pub fn hints(&self) -> &[Hint] {
+        &self.hints
+    }
+
+    /// Prefix typed so far (after backspace normalization via [`key`](Self::key)).
+    #[must_use]
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    /// Hints that should be drawn for the overlay given the current prefix and filter state.
+    #[must_use]
+    pub fn visible_hints(&self) -> Vec<Hint> {
+        if self.finished || self.hints.is_empty() {
+            return Vec::new();
+        }
+        match filter(&self.hints, &self.prefix) {
+            FilterResult::None => Vec::new(),
+            FilterResult::Single(h) => vec![h.clone()],
+            FilterResult::Many(v) => v.iter().map(|h| (*h).clone()).collect(),
+        }
+    }
+
     fn after_prefix_change(&mut self) -> SessionEvent {
         match filter(&self.hints, &self.prefix) {
             FilterResult::None => {

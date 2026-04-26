@@ -62,6 +62,16 @@ impl Renderer {
             .map_err(|_| RenderError::Disconnected)
     }
 
+    /// Updates pill geometry for an already-shown `session_id` (does not change `max_show_accepted`).
+    pub fn repaint(&self, session_id: u64, hints: &[Hint]) -> Result<(), RenderError> {
+        self.cmd
+            .send(overlay::RenderCmd::Repaint {
+                session_id,
+                hints: hints.to_vec(),
+            })
+            .map_err(|_| RenderError::Disconnected)
+    }
+
     /// Stops the worker and joins. Prefer this over relying on [`Drop`] for deterministic teardown
     /// in tests.
     pub fn shutdown(mut self) -> Result<(), RenderError> {

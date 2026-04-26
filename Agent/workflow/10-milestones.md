@@ -156,7 +156,9 @@ screen positions. Esc dismisses.
 **Anti-scope:** performance optimization, fallbacks, multi-monitor,
 configuration.
 
-> 🟢 **MVP complete.** Navigator is functionally a v0. Now we make it fast.
+> 🟢 **MVP path landed in tree** (orchestration in `nav-app`; formal gates above
+> are still partially manual). Navigator is functionally a v0. **Next:** make it
+> fast (M6 / Phase D).
 
 ---
 
@@ -357,14 +359,14 @@ Engineers update this table as part of each PR.
 
 | ID  | Milestone                  | Status   | P95 metric           | Notes |
 |-----|----------------------------|----------|----------------------|-------|
-| M0  | Foundations                | TODO     | —                    |       |
-| M1  | Pure-Rust core             | TODO     | —                    |       |
-| M2  | Windows hello + hotkey     | TODO     | —                    |       |
-| M3  | UIA baseline               | TODO     | —                    |       |
-| M4  | First overlay              | TODO     | —                    |       |
-| M5  | End-to-end MVP             | TODO     | —                    |       |
-| M6  | UIA cache                  | TODO     | —                    |       |
-| M7  | Pre-warm                   | TODO     | —                    |       |
+| M0  | Foundations                | **Done** | —                    | Workspace + toolchain + `.github/workflows/ci.yml`. |
+| M1  | Pure-Rust core             | **Done** | —                    | `nav-core` tests + benches; gate counts per milestone text. |
+| M2  | Windows hello + hotkey     | **Done** | —                    | `navigator` binary, `Alt+;`, single-instance. |
+| M3  | UIA baseline               | **Done** | —                    | Uncached `FindAll` + invoke pattern; slow baseline (see `12-benchmarking.md`). |
+| M4  | First overlay              | **Done** | —                    | D2D + DComp primary-monitor overlay; session-filtered `Show`/`Hide`. |
+| M5  | End-to-end MVP             | **Done***| —                    | *Orchestration lives in `crates/nav-app/src/main.rs` (no separate `orchestrator` crate yet). Hint mode: `WH_KEYBOARD_LL` in `nav-input`. Formal 100× reliability / fault-injection gates still manual.* |
+| M6  | UIA cache                  | TODO     | —                    | Next perf milestone (Phase D / `04-build-order.md` D1). |
+| M7  | Pre-warm                   | TODO     | —                    | Overlay GPU init still on first `Show` in current code. |
 | M8  | Multi-monitor              | TODO     | —                    |       |
 | M9  | Fallbacks                  | TODO     | —                    |       |
 | M10 | Config + tray              | TODO     | —                    |       |

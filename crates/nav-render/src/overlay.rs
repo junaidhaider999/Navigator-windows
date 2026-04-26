@@ -5,17 +5,17 @@ use std::time::Duration;
 use crossbeam_channel::{Receiver, select, tick};
 use nav_core::Hint;
 use windows::Win32::Foundation::{
-    HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, RPC_E_CHANGED_MODE, WPARAM,
+    COLORREF, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, RPC_E_CHANGED_MODE, WPARAM,
 };
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     HWND_TOPMOST, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassExW, SW_HIDE,
-    SW_SHOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetWindowPos, ShowWindow, TranslateMessage,
+    LWA_ALPHA, SW_SHOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetLayeredWindowAttributes, SetWindowPos,
+    ShowWindow, TranslateMessage,
     UnregisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DESTROY, WNDCLASS_STYLES, WNDCLASSEXW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
@@ -28,6 +28,7 @@ const CLASS_NAME: PCWSTR = w!("Navigator.RenderOverlay.C2");
 
 pub(crate) enum RenderCmd {
     Show { session_id: u64, hints: Vec<Hint> },
+    Repaint { session_id: u64, hints: Vec<Hint> },
     Hide { session_id: u64 },
     Shutdown,
 }
@@ -90,6 +91,12 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                             Err(e) => eprintln!("[render] show failed: {e}"),
                         }
                     }
+                    Ok(RenderCmd::Repaint { session_id, hints }) => {
+                        if displayed_session != Some(session_id) {
+                            continue;
+                        }
+                        pending_hints = hints;
+                    }
                     Ok(RenderCmd::Hide { session_id }) => {
                         if displayed_session != Some(session_id) {
                             continue;
@@ -114,9 +121,6 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
             recv(ticker) -> _ => {
                 if let Some(h) = hwnd {
                     unsafe { pump_messages(h) };
-                    if visible && escape_pressed() {
-                        unsafe { hide_overlay(&mut hwnd, &mut gpu, &mut visible, &mut displayed_session) };
-                    }
                     if visible {
                         if let Some(ref mut g) = gpu {
                             if let Err(e) = unsafe { g.update_and_present(&pending_hints) } {
@@ -130,10 +134,6 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
     }
 
     unsafe { CoUninitialize() };
-}
-
-fn escape_pressed() -> bool {
-    unsafe { (GetAsyncKeyState(VK_ESCAPE.0 as i32) as u16 & 0x8000) != 0 }
 }
 
 unsafe fn pump_messages(hwnd: HWND) {
@@ -188,13 +188,14 @@ unsafe fn show_overlay(
             )));
         }
 
+        // Omit `WS_EX_NOREDIRECTIONBITMAP`: with `CreateSwapChainForHwnd` + layered popups it can
+        // trigger `DXGI_ERROR_INVALID_CALL` on several driver stacks (see C3 overlay bring-up).
         let exstyle = WINDOW_EX_STYLE(
             WS_EX_LAYERED.0
                 | WS_EX_TRANSPARENT.0
                 | WS_EX_TOPMOST.0
                 | WS_EX_NOACTIVATE.0
-                | WS_EX_TOOLWINDOW.0
-                | WS_EX_NOREDIRECTIONBITMAP.0,
+                | WS_EX_TOOLWINDOW.0,
         );
 
         let hwnd = CreateWindowExW(
@@ -227,6 +228,13 @@ unsafe fn show_overlay(
         SWP_NOACTIVATE | SWP_SHOWWINDOW,
     )
     .map_err(|e| RenderError::Win32(e.to_string()))?;
+
+    // Layered popups need per-window alpha before DXGI/DComp can target them reliably.
+    unsafe {
+        SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA).map_err(|e| {
+            RenderError::Win32(format!("SetLayeredWindowAttributes: {e}"))
+        })?;
+    }
 
     *gpu = Some(D2dCompositionRenderer::new(hwnd)?);
     if let Some(ref mut g) = *gpu {

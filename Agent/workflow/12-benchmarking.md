@@ -76,6 +76,17 @@ If you do not have this hardware exactly, your numbers are **provisional**.
 The CI machine on `windows-latest` GitHub-hosted runners is the second
 canonical environment; numbers from there are tracked separately.
 
+## Pre-Phase-D baseline (uncached UIA, real apps)
+
+Before **M6 / D1** lands, `nav-uia` uses a slow **`FindAll(TreeScope_Descendants, …)`**
+walk without a cache request. On a typical dev machine, **hundreds of milliseconds**
+for ~100+ invoke-pattern nodes is expected. Record your machine’s numbers here
+when you change enumeration so Phase D can show a clear delta:
+
+| Date       | App / HWND role   | Elements | Wall time (ms) | Notes                          |
+|------------|-------------------|----------|----------------|--------------------------------|
+| 2026-04-26 | Example (fill in) | —        | —              | Replace row when benching.   |
+
 ## How we measure hotkey-to-pixels latency
 
 This is the headline metric. Capturing it correctly is harder than it

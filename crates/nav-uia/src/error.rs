@@ -14,6 +14,4 @@ pub enum UiaError {
     Operation(String),
     #[error("enumeration not supported for this configuration: {0}")]
     UnsupportedConfiguration(&'static str),
-    #[error("`invoke` is not implemented in this baseline build")]
-    InvokeNotImplemented,
 }

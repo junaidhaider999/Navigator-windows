@@ -120,3 +120,11 @@ Design for this user. Everything else follows.
 > across two different DPI scalings and a multi-monitor setup.
 
 That is the entire bar. Hit it, ship it, then we earn the right to discuss v2.
+
+## Current implementation vs this document
+
+The **Rust workspace** in `crates/` delivers a **Phase C** path (hotkey → uncached
+UIA → overlay → typed invoke) with **P95 budgets not yet met** — see
+`12-benchmarking.md` and the status board in `10-milestones.md`. Treat the
+latency table above as the **contract to converge on**, not a claim about
+today’s uncached build.

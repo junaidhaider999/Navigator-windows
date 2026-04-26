@@ -32,13 +32,12 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::IDXGIAdapter;
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT, DXGI_PRESENT_ALLOW_TEARING,
-    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING,
-    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2,
-    IDXGISurface, IDXGISwapChain1,
+    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT, DXGI_SCALING_STRETCH,
+    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD,
+    DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
 use windows::core::{Interface, w};
 
 use crate::RenderError;
@@ -131,32 +130,41 @@ impl D2dCompositionRenderer {
                 Scaling: DXGI_SCALING_STRETCH,
                 SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
                 AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
-                Flags: DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0 as u32,
+                // `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` requires
+                // `IDXGIFactory5::CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING)` first;
+                // using it unconditionally yields `DXGI_ERROR_INVALID_CALL` on many drivers.
+                Flags: 0,
             };
+            // `CreateSwapChainForHwnd` + layered `WS_POPUP` often returns `DXGI_ERROR_INVALID_CALL`
+            // (flip model is tied to the HWND presentation path). Composition swap chains are
+            // HWND-agnostic; DComp binds them via `SetContent` + `CreateTargetForHwnd`.
             dxgi_factory
-                .CreateSwapChainForHwnd(
+                .CreateSwapChainForComposition(
                     &d3d,
-                    hwnd,
                     &desc,
-                    None,
                     None::<&windows::Win32::Graphics::Dxgi::IDXGIOutput>,
                 )
-                .map_err(|e| RenderError::Win32(e.to_string()))?
+                .map_err(|e| {
+                    RenderError::Win32(format!(
+                        "CreateSwapChainForComposition ({}×{}, flags={}): {e}",
+                        pixel_w, pixel_h, desc.Flags
+                    ))
+                })?
         };
 
         root_visual
             .SetContent(&swap_chain)
-            .map_err(|e| RenderError::Win32(e.to_string()))?;
+            .map_err(|e| RenderError::Win32(format!("DComp SetContent(swap_chain): {e}")))?;
 
         let dcomp_target = dcomp
             .CreateTargetForHwnd(hwnd, true)
-            .map_err(|e| RenderError::Win32(e.to_string()))?;
+            .map_err(|e| RenderError::Win32(format!("DComp CreateTargetForHwnd: {e}")))?;
         dcomp_target
             .SetRoot(&root_visual)
-            .map_err(|e| RenderError::Win32(e.to_string()))?;
+            .map_err(|e| RenderError::Win32(format!("DComp SetRoot: {e}")))?;
         dcomp
             .Commit()
-            .map_err(|e| RenderError::Win32(e.to_string()))?;
+            .map_err(|e| RenderError::Win32(format!("DComp Commit: {e}")))?;
 
         let write: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)
             .map_err(|e| RenderError::Win32(e.to_string()))?;
@@ -188,10 +196,13 @@ impl D2dCompositionRenderer {
 
         d2d_ctx.SetDpi(dpi, dpi);
 
+        let origin = window_origin_phys(hwnd)?;
         let last_pills = scene::pills_for_frame(
             &[],
+            origin,
             client_w_dips(pixel_w, dpi),
             client_h_dips(pixel_h, dpi),
+            dpi,
         );
 
         Ok(Self {
@@ -241,12 +252,18 @@ impl D2dCompositionRenderer {
                 nw,
                 nh,
                 DXGI_FORMAT_B8G8R8A8_UNORM,
-                DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING,
+                DXGI_SWAP_CHAIN_FLAG(0),
             )
             .map_err(|e| RenderError::Win32(e.to_string()))?;
 
-        self.last_pills =
-            scene::pills_for_frame(&[], client_w_dips(nw, dpi), client_h_dips(nh, dpi));
+        let origin = window_origin_phys(self.hwnd)?;
+        self.last_pills = scene::pills_for_frame(
+            &[],
+            origin,
+            client_w_dips(nw, dpi),
+            client_h_dips(nh, dpi),
+            dpi,
+        );
         self.dcomp
             .Commit()
             .map_err(|e| RenderError::Win32(e.to_string()))?;
@@ -260,7 +277,8 @@ impl D2dCompositionRenderer {
 
         let cw = client_w_dips(self.pixel_w, self.dpi);
         let ch = client_h_dips(self.pixel_h, self.dpi);
-        self.last_pills = scene::pills_for_frame(hints, cw, ch);
+        let origin = window_origin_phys(self.hwnd)?;
+        self.last_pills = scene::pills_for_frame(hints, origin, cw, ch, self.dpi);
 
         let surface: IDXGISurface = self
             .swap_chain
@@ -340,15 +358,20 @@ impl D2dCompositionRenderer {
     }
 
     unsafe fn present_frame(&self) -> Result<(), RenderError> {
-        let hr = self.swap_chain.Present(0, DXGI_PRESENT_ALLOW_TEARING);
-        if hr.is_err() {
-            self.swap_chain
-                .Present(1, DXGI_PRESENT(0))
-                .ok()
-                .map_err(|e| RenderError::Win32(e.to_string()))?;
-        }
+        // Sync interval 1: valid without `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` (unlike interval 0).
+        self.swap_chain
+            .Present(1, DXGI_PRESENT(0))
+            .ok()
+            .map_err(|e| RenderError::Win32(e.to_string()))?;
         Ok(())
     }
+}
+
+fn window_origin_phys(hwnd: HWND) -> Result<(i32, i32), RenderError> {
+    let mut wr = RECT::default();
+    unsafe { GetWindowRect(hwnd, &mut wr) }
+        .map_err(|e| RenderError::Win32(format!("GetWindowRect: {e}")))?;
+    Ok((wr.left, wr.top))
 }
 
 fn client_w_dips(px_w: u32, dpi: f32) -> f32 {

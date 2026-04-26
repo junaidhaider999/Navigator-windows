@@ -7,6 +7,12 @@ small set of orthogonal modules. There is no service, no IPC, no daemon. The
 entire engine lives in one OS process and communicates through lock-free
 channels.
 
+**Current code (Phase C):** the “orchestrator” behavior lives in
+`crates/nav-app/src/main.rs` (hotkey → UIA → `nav-core::Session` →
+`nav-render::Renderer`). There is no separate `nav-app::orchestrator` module yet,
+and no rayon worker pool on the hot path — enumeration runs on the main thread
+after the hotkey receive.
+
 ```
                 ┌────────────────────────────────────────────────────────┐
                 │                     nav-app (binary)                   │

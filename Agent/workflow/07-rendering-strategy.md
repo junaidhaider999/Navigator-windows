@@ -14,8 +14,13 @@ rasterizer.
 
 - **Layered window (`WS_EX_LAYERED`)** — the only way Windows allows true
   per-pixel alpha + click-through behavior we need.
-- **`WS_EX_NOREDIRECTIONBITMAP`** — we are not a GDI window. Skipping the
-  redirection bitmap saves a per-frame copy and lets DComp own the surface.
+- **`WS_EX_NOREDIRECTIONBITMAP` (target, not always present)** — in the ideal
+  design we skip the GDI redirection bitmap so DComp owns the surface. The
+  **current** overlay omits this flag because **`CreateSwapChainForHwnd`**
+  + flip model returned **`DXGI_ERROR_INVALID_CALL`** on layered full-screen
+  popups on several drivers; we instead use **`CreateSwapChainForComposition`**
+  and bind with **`CreateTargetForHwnd`**. Revisit after wider GPU matrix
+  testing (see **ADR-0015**).
 - **DirectComposition** — gives us a GPU-side visual tree composited by the
   DWM at vsync. No `Present` cadence to manage. Smooth, flicker-free.
 - **Direct2D** — hardware-accelerated 2D primitives (rounded rects, text via
@@ -43,7 +48,7 @@ exStyle     : WS_EX_LAYERED
               | WS_EX_TOPMOST         // always above the target
               | WS_EX_NOACTIVATE      // never gets focus
               | WS_EX_TOOLWINDOW      // not in Alt+Tab, not in taskbar
-              | WS_EX_NOREDIRECTIONBITMAP // DComp-only surface
+              // WS_EX_NOREDIRECTIONBITMAP — omitted in current build (see ADR-0015)
 parent      : None (top-level)
 position    : One window per monitor, sized to that monitor's bounds.
 ```

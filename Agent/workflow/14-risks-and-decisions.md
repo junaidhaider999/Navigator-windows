@@ -182,6 +182,31 @@
 - **Consequences:** We cannot field-collect crash dumps. We rely on
   user-reported issues and `tracing` logs.
 
+### ADR-0015: Composition swap chain + no `WS_EX_NOREDIRECTIONBITMAP` on MVP overlay
+- **Status:** accepted
+- **Date:** 2026-04-26
+- **Context:** On common driver stacks, **`IDXGIFactory2::CreateSwapChainForHwnd`**
+  on a **layered full-screen `WS_POPUP`** returned **`DXGI_ERROR_INVALID_CALL`**
+  (`0x887A0001`) even with valid pixel dimensions and without
+  `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING`. **`WS_EX_NOREDIRECTIONBITMAP`** made the
+  failure mode worse in local testing. **`SetLayeredWindowAttributes(..., LWA_ALPHA)`**
+  is still required so the HWND has a defined layered alpha path before DComp
+  targets it.
+- **Decision:** Create the flip-model swap chain with
+  **`CreateSwapChainForComposition`**, attach it to the DComp visual with
+  **`SetContent`**, and bind the visual tree to the overlay HWND with
+  **`CreateTargetForHwnd`**. Omit **`WS_EX_NOREDIRECTIONBITMAP`** on this window
+  class until we have a PIX-validated matrix that proves a safe combination.
+  Do not pass **`DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING`** unless
+  **`CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING)`** succeeds; use
+  **`Present(1, 0)`** when tearing is off.
+- **Consequences:**
+  - Slightly more documentation drift vs the original "redirection bitmap"
+    story in **ADR-0004** until we either restore the flag behind a probe or
+    document "never" for this HWND class.
+  - One extra layered-window setup call (`SetLayeredWindowAttributes`) on
+    every show path that creates the GPU stack.
+
 ---
 
 ## Risks register

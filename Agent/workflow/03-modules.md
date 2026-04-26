@@ -293,7 +293,7 @@ impl Renderer {
     pub fn spawn(cfg: &Config) -> Result<Self, RenderError>;
 
     pub fn show(&self, session_id: u64, hints: &[Hint]) -> Result<(), RenderError>;
-    pub fn update(&self, session_id: u64, mask: &[HintId]) -> Result<(), RenderError>;
+    pub fn repaint(&self, session_id: u64, hints: &[Hint]) -> Result<(), RenderError>;
     pub fn hide(&self, session_id: u64) -> Result<(), RenderError>;
 
     pub fn shutdown(self);
@@ -305,23 +305,24 @@ impl Renderer {
 ```
 WS_POPUP
 WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST
-| WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP
+| WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
 ```
 
 - `WS_EX_NOACTIVATE` — never steals focus, never appears in Alt+Tab.
 - `WS_EX_TRANSPARENT` — input passes through us. Keys are captured by the
   LL hook in `nav-input`, not by this window.
-- `WS_EX_NOREDIRECTIONBITMAP` — required for DirectComposition; we are not a
-  GDI window.
+- `WS_EX_NOREDIRECTIONBITMAP` — **not** set in the current overlay: DXGI flip
+  swap chains failed to create on layered popups when combined with it; see
+  **ADR-0015** in `14-risks-and-decisions.md`.
 - `WS_EX_TOOLWINDOW` — keeps us out of the taskbar.
 
 ### Lifecycle
 
-1. **Boot** (during app startup, before first hotkey): create one overlay
-   per monitor, offscreen-positioned, hidden. Initialize D3D11, D2D, DComp
-   tree, brushes, default text format. **Pre-warm.** First hint session
-   pays no init cost.
-2. **Show**: position each overlay over its monitor, build a scene from
+1. **Boot** (during app startup, before first hotkey): **target** design —
+   create one overlay per monitor, hidden, and pre-warm D3D/D2D/DComp (**M7**).
+   **Current code:** the overlay HWND is created on first `Show`; the
+   `D2dCompositionRenderer` is constructed there (first hotkey pays GPU init).
+2. **Show**: position overlay over the primary monitor, build a scene from
    `Vec<Hint>`, encode draw list, present, `DComp::Commit`.
 3. **Update**: re-encode visible quads only, swap buffer, commit. The full
    tree is not rebuilt.
