@@ -221,6 +221,10 @@ shippable in *concept* at this point.
 
 - **Goal:** filtering keystrokes update only changed quads.
 - **Touches:** `nav-render/scene.rs`.
+- **Implemented:** `paint_plan` compares last vs new pill geometry by **label** (unique per
+  session); `NoOp` skips `BeginDraw`/`Present`; `Partial` uses `PushAxisAlignedClip` + transparent
+  `FillRectangle` over the dirty union + redraws only pills intersecting the clip;
+  large diffs or empty/old transitions use **full** clear + draw (`d2d.rs`).
 - **Done when:**
   - During filter mode, `update()` measured at < 1.5 ms P95.
   - Frame trace shows only damaged regions are re-encoded.

@@ -9,10 +9,11 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
-    D2D1_CAP_STYLE_FLAT, D2D1_DASH_STYLE_SOLID, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_LINE_JOIN_MITER, D2D1_STROKE_STYLE_PROPERTIES1,
-    D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1, ID2D1StrokeStyle1,
+    D2D1_ANTIALIAS_MODE_ALIASED, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET,
+    D2D1_BITMAP_PROPERTIES1, D2D1_CAP_STYLE_FLAT, D2D1_DASH_STYLE_SOLID,
+    D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_LINE_JOIN_MITER,
+    D2D1_STROKE_STYLE_PROPERTIES1, D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext,
+    ID2D1Factory1, ID2D1StrokeStyle1,
 };
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D11::{
@@ -41,7 +42,7 @@ use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
 use windows::core::{Interface, w};
 
 use crate::RenderError;
-use crate::scene::{self, PillGeom};
+use crate::scene::{self, PaintPlan, PillGeom};
 
 const FRAME_BUDGET: Duration = Duration::from_millis(4);
 
@@ -278,7 +279,12 @@ impl D2dCompositionRenderer {
         let cw = client_w_dips(self.pixel_w, self.dpi);
         let ch = client_h_dips(self.pixel_h, self.dpi);
         let origin = window_origin_phys(self.hwnd)?;
-        self.last_pills = scene::pills_for_frame(hints, origin, cw, ch, self.dpi);
+        let new_pills = scene::pills_for_frame(hints, origin, cw, ch, self.dpi);
+        let plan = scene::paint_plan(&self.last_pills, &new_pills, cw, ch);
+        if matches!(plan, PaintPlan::NoOp) {
+            self.last_pills = new_pills;
+            return Ok(t0.elapsed());
+        }
 
         let surface: IDXGISurface = self
             .swap_chain
@@ -310,7 +316,6 @@ impl D2dCompositionRenderer {
             b: 0.0,
             a: 0.0,
         };
-        self.d2d_ctx.Clear(Some(&clear));
 
         let fill = self
             .d2d_ctx
@@ -325,16 +330,45 @@ impl D2dCompositionRenderer {
             .CreateSolidColorBrush(&scene::pill_text_color(), None)
             .map_err(|e| RenderError::Win32(e.to_string()))?;
 
-        scene::draw_pills(
-            &self.d2d_ctx,
-            &self.text_format,
-            &self.write,
-            &self.last_pills,
-            &fill,
-            &border,
-            &text_brush,
-            &self.stroke,
-        )?;
+        match plan {
+            PaintPlan::Full => {
+                self.d2d_ctx.Clear(Some(&clear));
+                scene::draw_pills(
+                    &self.d2d_ctx,
+                    &self.text_format,
+                    &self.write,
+                    &new_pills,
+                    &fill,
+                    &border,
+                    &text_brush,
+                    &self.stroke,
+                )?;
+            }
+            PaintPlan::Partial { clip_dips } => {
+                self.d2d_ctx
+                    .PushAxisAlignedClip(&clip_dips, D2D1_ANTIALIAS_MODE_ALIASED);
+                let clear_brush = self
+                    .d2d_ctx
+                    .CreateSolidColorBrush(&clear, None)
+                    .map_err(|e| RenderError::Win32(e.to_string()))?;
+                self.d2d_ctx.FillRectangle(&clip_dips, &clear_brush);
+                let subset = scene::pills_for_partial_repaint(&new_pills, &clip_dips);
+                scene::draw_pills(
+                    &self.d2d_ctx,
+                    &self.text_format,
+                    &self.write,
+                    &subset,
+                    &fill,
+                    &border,
+                    &text_brush,
+                    &self.stroke,
+                )?;
+                self.d2d_ctx.PopAxisAlignedClip();
+            }
+            PaintPlan::NoOp => unreachable!("NoOp handled before BeginDraw"),
+        }
+
+        self.last_pills = new_pills;
 
         self.d2d_ctx
             .EndDraw(None, None)
