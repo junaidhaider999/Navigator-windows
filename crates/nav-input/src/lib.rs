@@ -1,0 +1,73 @@
+//! Global hotkey registration and the input pump for Navigator.
+//!
+//! On Windows: a message-only window receives `WM_HOTKEY` and forwards
+//! [`InputEvent`] values on a `crossbeam-channel` queue. The `WM_HOTKEY` path
+//! only performs timing, `GetForegroundWindow`, and a channel send — no extra
+//! heap work in the window procedure beyond what the channel may do internally.
+
+mod hotkey;
+
+#[cfg(windows)]
+mod thread;
+
+#[cfg(windows)]
+pub use thread::InputThread;
+
+#[cfg(not(windows))]
+mod stub;
+
+#[cfg(not(windows))]
+pub use stub::InputThread;
+
+/// Snapshot emitted when the primary hotkey (`Alt+;`) fires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HotkeyPress {
+    /// `RegisterHotKey` id (`wParam` of `WM_HOTKEY`).
+    pub id: i32,
+    /// `GetForegroundWindow` at trigger time (pointer value as `usize`).
+    pub captured_hwnd: usize,
+    /// Time inside the `WM_HOTKEY` handler: ΔQPC from before `GetForegroundWindow` to after, in microseconds.
+    pub latency_us: u64,
+}
+
+/// Events from the input worker (hotkeys today; hint-mode keys later).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputEvent {
+    Hotkey(HotkeyPress),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum InputError {
+    #[error("nav-input is only supported on Windows")]
+    UnsupportedPlatform,
+    #[error(
+        "could not register global hotkey Alt+; (MOD_ALT|MOD_NOREPEAT, VK_OEM_1). Another application may already use this chord. {details}"
+    )]
+    HotkeyRegisterFailed { details: String },
+    #[cfg(windows)]
+    #[error(transparent)]
+    Win32(#[from] windows::core::Error),
+    #[error("input thread exited before reporting hotkey registration status")]
+    ThreadEndedDuringStartup,
+}
+
+#[cfg(windows)]
+/// Second-instance handshake: ask the running Navigator to bring its console forward.
+pub fn poke_peer_for_foreground() {
+    thread::poke_peer_for_foreground();
+}
+
+#[cfg(not(windows))]
+pub fn poke_peer_for_foreground() {}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(not(windows))]
+    #[test]
+    fn spawn_errors_on_non_windows() {
+        assert!(matches!(
+            crate::InputThread::spawn(),
+            Err(crate::InputError::UnsupportedPlatform)
+        ));
+    }
+}

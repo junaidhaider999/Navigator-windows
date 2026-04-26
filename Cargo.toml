@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/nav-core",
     "crates/nav-bench",
+    "crates/nav-input",
+    "crates/nav-app",
 ]
 
 [workspace.package]
@@ -14,6 +16,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 # Internal (add path crates as they land; see Agent/workflow/02-folder-structure.md)
 nav-core = { path = "crates/nav-core" }
+nav-input = { path = "crates/nav-input" }
 
 # External — versions pinned via Cargo.lock; bump deliberately.
 windows = "0.59"
@@ -35,3 +38,6 @@ dhat = "0.3"
 
 # Bench-only
 criterion = "0.5"
+
+# Windows exe manifest / VERSIONINFO (nav-app build.rs)
+winres = "0.1"
