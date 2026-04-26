@@ -3,20 +3,21 @@
 use crate::hwnd::UiaHwnd;
 use nav_core::{Backend, ElementKind, RawHint};
 use windows::Win32::UI::Accessibility::{
-    IUIAutomation, IUIAutomationElement, TreeScope_Descendants, UIA_InvokePatternId,
+    IUIAutomation, IUIAutomationCacheRequest, IUIAutomationElement, TreeScope_Descendants,
 };
 use windows::core::BSTR;
 
 use crate::UiaError;
 use crate::coords::rect_from_uia_bounds;
 use crate::options::EnumOptions;
-use crate::pattern::has_invoke_pattern;
+use crate::pattern::has_invoke_pattern_cached;
 
-/// Baseline enumeration: all descendants, keep elements with an invoke pattern and a usable rect.
+/// Cached enumeration: `FindAllBuildCache` + invoke / bounds / enabled filters.
 pub fn enumerate_baseline(
     automation: &IUIAutomation,
     hwnd: UiaHwnd,
     opts: &EnumOptions,
+    cache: &IUIAutomationCacheRequest,
 ) -> Result<Vec<RawHint>, UiaError> {
     if hwnd.is_invalid() {
         return Ok(Vec::new());
@@ -28,8 +29,8 @@ pub fn enumerate_baseline(
     let true_cond = unsafe { automation.CreateTrueCondition() }
         .map_err(|e| UiaError::Operation(e.to_string()))?;
 
-    let all = unsafe { root.FindAll(TreeScope_Descendants, &true_cond) }
-        .map_err(|e| UiaError::Operation(e.to_string()))?;
+    let all = unsafe { root.FindAllBuildCache(TreeScope_Descendants, &true_cond, cache) }
+        .map_err(|e| UiaError::Operation(format!("FindAllBuildCache: {e}")))?;
 
     let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
 
@@ -45,15 +46,9 @@ pub fn enumerate_baseline(
             Err(e) => return Err(UiaError::Operation(e.to_string())),
         };
 
-        if !has_invoke_pattern(&el) {
+        if !has_invoke_pattern_cached(&el) {
             continue;
         }
-
-        // Second pattern read (intentionally redundant) to mirror legacy per-element COM cost.
-        let _invoke = match unsafe { el.GetCurrentPattern(UIA_InvokePatternId) } {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
 
         if !opts.include_disabled {
             match unsafe { el.CurrentIsEnabled() } {

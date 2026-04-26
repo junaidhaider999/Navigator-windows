@@ -175,7 +175,10 @@ shippable in *concept* at this point.
 
 - **Goal:** the single biggest perf win. Build the cache request once at
   startup; rely on it for every enumeration.
-- **Touches:** `nav-uia/runtime.rs`, `nav-uia/enumerate.rs`.
+- **Touches:** `nav-uia/runtime.rs`, `nav-uia/enumerate.rs`, `nav-uia/cache.rs`.
+- **Implemented:** `IUIAutomation::CreateCacheRequest` at `UiaRuntime::new`,
+  `FindAllBuildCache` + `GetCachedPattern` for Invoke; `TreeScope_Element` on the
+  request per Microsoft’s `FindAllBuildCache` contract.
 - **Done when:**
   - Reference window enumeration drops from B3's baseline to **≤ 25 ms P95**.
   - Bench `enumerate_real` shows the delta in the regression report.

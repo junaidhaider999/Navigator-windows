@@ -1,7 +1,7 @@
 //! UI Automation client for Navigator (`Agent/workflow/03-modules.md`, Phase B3 baseline).
 //!
-//! On Windows this crate performs a **slow, uncached** `FindAll` enumeration suitable for
-//! regression baselines. Other targets compile stubs so Linux CI stays green.
+//! On Windows this crate performs UIA enumeration using **`FindAllBuildCache`** and a
+//! long-lived `IUIAutomationCacheRequest` (Phase D1). Other targets compile stubs so Linux CI stays green.
 
 mod error;
 mod hwnd;
@@ -11,6 +11,8 @@ pub use error::UiaError;
 pub use hwnd::UiaHwnd;
 pub use options::{EnumOptions, FallbackPolicy};
 
+#[cfg(windows)]
+mod cache;
 #[cfg(windows)]
 mod coords;
 #[cfg(windows)]

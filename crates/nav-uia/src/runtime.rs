@@ -6,17 +6,21 @@ use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     CoUninitialize,
 };
-use windows::Win32::UI::Accessibility::{CUIAutomation, CUIAutomation8, IUIAutomation};
+use windows::Win32::UI::Accessibility::{
+    CUIAutomation, CUIAutomation8, IUIAutomation, IUIAutomationCacheRequest,
+};
 
 use crate::UiaError;
+use crate::cache::create_enumeration_cache_request;
 use crate::enumerate::enumerate_baseline;
 use crate::hwnd::UiaHwnd;
 use crate::invoke::invoke_invoke_pattern;
 use crate::options::{EnumOptions, FallbackPolicy};
 
-/// UI Automation client (B3 baseline: no cache, no overlay).
+/// UI Automation client (D1: shared enumeration cache request).
 pub struct UiaRuntime {
     automation: IUIAutomation,
+    enum_cache: IUIAutomationCacheRequest,
     /// Call [`CoUninitialize`](CoUninitialize) only if this instance successfully called `CoInitializeEx` first on this thread.
     co_uninit_on_drop: bool,
 }
@@ -52,20 +56,31 @@ impl UiaRuntime {
                 }
             };
 
+        let enum_cache = match create_enumeration_cache_request(&automation) {
+            Ok(c) => c,
+            Err(e) => {
+                if co_uninit_on_drop {
+                    unsafe { CoUninitialize() };
+                }
+                return Err(e);
+            }
+        };
+
         Ok(Self {
             automation,
+            enum_cache,
             co_uninit_on_drop,
         })
     }
 
-    /// Slow baseline enumeration for the window captured at hotkey time.
+    /// Enumerate invoke targets for the window captured at hotkey time (D1 cache).
     pub fn enumerate(&self, hwnd: UiaHwnd, opts: &EnumOptions) -> Result<Vec<RawHint>, UiaError> {
         if opts.fallback == FallbackPolicy::MsaaOnly {
             return Err(UiaError::UnsupportedConfiguration(
                 "MsaaOnly is not implemented in the B3 baseline",
             ));
         }
-        enumerate_baseline(&self.automation, hwnd, opts)
+        enumerate_baseline(&self.automation, hwnd, opts, &self.enum_cache)
     }
 
     /// Pattern dispatch: `Invoke` on the element located at the same `FindAll` index as enumeration.

@@ -87,6 +87,9 @@ when you change enumeration so Phase D can show a clear delta:
 |------------|-------------------|----------|----------------|--------------------------------|
 | 2026-04-26 | Example (fill in) | —        | —              | Replace row when benching.   |
 
+After **D1**, add a second column group here with `FindAllBuildCache` timings vs
+the old `FindAll` baseline from the same machine.
+
 ## How we measure hotkey-to-pixels latency
 
 This is the headline metric. Capturing it correctly is harder than it
