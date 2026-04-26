@@ -23,9 +23,8 @@ The pre-commit hook refuses any commit that stages changes under `legacy/`
 must use `git commit --no-verify` only when intentional, per
 `Agent/workflow/11-legacy-migration.md`.
 
-The shipping binary will be `nav-app.exe` once the `nav-app` crate exists (M1+).
-The `workspace-stub` crate exists only because Cargo requires at least one workspace
-member; it goes away when the real `nav-*` crates are added (M1).
+The shipping binary will be `nav-app.exe` once the `nav-app` crate exists (M2+).
+Pure logic lives in `crates/nav-core` (cross-platform); Criterion benches in `crates/nav-bench`.
 
 The legacy Hunt-and-Peck (HAP) C# sources exist only under [`legacy/`](legacy/).
 

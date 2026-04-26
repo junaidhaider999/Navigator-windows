@@ -1,0 +1,16 @@
+[package]
+name = "nav-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Criterion benches for Navigator (Level 1 micro-benchmarks)."
+
+[dependencies]
+criterion = { workspace = true }
+nav-core = { workspace = true }
+
+[[bench]]
+name = "label"
+harness = false

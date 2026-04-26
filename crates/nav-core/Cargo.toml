@@ -1,0 +1,14 @@
+[package]
+name = "nav-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Pure domain logic for Navigator (hints, labels, session)."
+
+[dependencies]
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+dhat = { workspace = true }
