@@ -5,6 +5,7 @@ members = [
     "crates/nav-bench",
     "crates/nav-input",
     "crates/nav-uia",
+    "crates/nav-render",
     "crates/nav-app",
 ]
 
@@ -19,6 +20,7 @@ license = "MIT OR Apache-2.0"
 nav-core = { path = "crates/nav-core" }
 nav-input = { path = "crates/nav-input" }
 nav-uia = { path = "crates/nav-uia" }
+nav-render = { path = "crates/nav-render" }
 
 # External — versions pinned via Cargo.lock; bump deliberately.
 windows = "0.59"

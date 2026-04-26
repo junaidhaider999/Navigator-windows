@@ -13,6 +13,7 @@ mod single_instance;
 fn main() -> std::process::ExitCode {
     use clap::Parser;
     use nav_input::{InputEvent, InputThread};
+    use nav_render::Renderer;
     use nav_uia::{EnumOptions, UiaRuntime};
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
@@ -55,7 +56,15 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(1);
         }
     };
+    let renderer = match Renderer::spawn() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("render init: {e}");
+            return std::process::ExitCode::from(1);
+        }
+    };
     let enum_opts = EnumOptions::default();
+    let mut overlay_session: u64 = 0;
 
     println!("Navigator ready");
 
@@ -68,6 +77,12 @@ fn main() -> std::process::ExitCode {
         if p.captured_hwnd == 0 {
             eprintln!("[uia] skipped: null foreground hwnd snapshot");
             continue;
+        }
+
+        overlay_session = overlay_session.wrapping_add(1);
+        let _ = renderer.hide(overlay_session.wrapping_sub(1));
+        if let Err(e) = renderer.show(overlay_session, &[]) {
+            eprintln!("[render] show: {e}");
         }
 
         let hwnd = HWND(p.captured_hwnd as *mut core::ffi::c_void);
