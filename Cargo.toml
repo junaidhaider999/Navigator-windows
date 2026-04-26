@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/workspace-stub",
+    # M1+: crates/nav-core, crates/nav-config, … — see Agent/workflow/02-folder-structure.md
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/zsims/hunt-n-peck"

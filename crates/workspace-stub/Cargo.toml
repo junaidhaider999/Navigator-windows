@@ -1,0 +1,8 @@
+[package]
+name = "workspace-stub"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "M0-only empty crate so `cargo check --workspace` succeeds. Replaced by nav-* crates in M1."

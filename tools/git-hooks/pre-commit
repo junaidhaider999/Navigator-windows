@@ -1,0 +1,7 @@
+#!/bin/sh
+# Refuse commits that touch read-only legacy reference (see Agent/workflow/11-legacy-migration.md).
+if git diff --cached --name-only | grep -q '^legacy/'; then
+  echo "Refusing to modify /legacy. It is read-only reference."
+  exit 1
+fi
+exit 0
