@@ -548,6 +548,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "nav-input",
+ "nav-uia",
  "thiserror",
  "tracing",
  "tracing-subscriber",
@@ -577,6 +578,15 @@ name = "nav-input"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "thiserror",
+ "windows",
+]
+
+[[package]]
+name = "nav-uia"
+version = "0.1.0"
+dependencies = [
+ "nav-core",
  "thiserror",
  "windows",
 ]

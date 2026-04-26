@@ -157,9 +157,7 @@ impl InputThread {
 
                 let mods = HOT_KEY_MODIFIERS(MOD_ALT.0 | MOD_NOREPEAT.0);
                 let vk = VK_OEM_1.0 as u32;
-                if let Err(e) =
-                    unsafe { RegisterHotKey(Some(hwnd), PRIMARY_HOTKEY_ID, mods, vk) }
-                {
+                if let Err(e) = unsafe { RegisterHotKey(Some(hwnd), PRIMARY_HOTKEY_ID, mods, vk) } {
                     unsafe {
                         let _ = DestroyWindow(hwnd);
                     }

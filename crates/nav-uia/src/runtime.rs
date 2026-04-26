@@ -1,0 +1,82 @@
+//! `UiaRuntime`: COM apartment + `CUIAutomation8` (fallback `CUIAutomation`) singleton.
+
+use nav_core::{Hint, RawHint};
+use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+    CoUninitialize,
+};
+use windows::Win32::UI::Accessibility::{CUIAutomation, CUIAutomation8, IUIAutomation};
+
+use crate::UiaError;
+use crate::enumerate::enumerate_baseline;
+use crate::hwnd::UiaHwnd;
+use crate::options::{EnumOptions, FallbackPolicy};
+
+/// UI Automation client (B3 baseline: no cache, no overlay).
+pub struct UiaRuntime {
+    automation: IUIAutomation,
+    /// Call [`CoUninitialize`](CoUninitialize) only if this instance successfully called `CoInitializeEx` first on this thread.
+    co_uninit_on_drop: bool,
+}
+
+impl UiaRuntime {
+    /// Initializes COM on this thread (STA) and creates the UI Automation singleton.
+    pub fn new() -> Result<Self, UiaError> {
+        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        if hr == RPC_E_CHANGED_MODE {
+            return Err(UiaError::ComInit(hr.0));
+        }
+        if hr.is_err() {
+            return Err(UiaError::ComInit(hr.0));
+        }
+        // `S_OK` (0) means we must balance with `CoUninitialize`. `S_FALSE` means COM was already initialized here.
+        let co_uninit_on_drop = hr.0 == 0;
+
+        let automation: IUIAutomation =
+            match unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) } {
+                Ok(a) => a,
+                Err(e8) => {
+                    match unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) } {
+                        Ok(a) => a,
+                        Err(e) => {
+                            if co_uninit_on_drop {
+                                unsafe { CoUninitialize() };
+                            }
+                            return Err(UiaError::AutomationCreate(format!(
+                                "CUIAutomation8: {e8}; CUIAutomation: {e}"
+                            )));
+                        }
+                    }
+                }
+            };
+
+        Ok(Self {
+            automation,
+            co_uninit_on_drop,
+        })
+    }
+
+    /// Slow baseline enumeration for the window captured at hotkey time.
+    pub fn enumerate(&self, hwnd: UiaHwnd, opts: &EnumOptions) -> Result<Vec<RawHint>, UiaError> {
+        if opts.fallback == FallbackPolicy::MsaaOnly {
+            return Err(UiaError::UnsupportedConfiguration(
+                "MsaaOnly is not implemented in the B3 baseline",
+            ));
+        }
+        enumerate_baseline(&self.automation, hwnd, opts)
+    }
+
+    /// Pattern dispatch (not implemented in B3).
+    pub fn invoke(&self, _hint: &Hint) -> Result<(), UiaError> {
+        Err(UiaError::InvokeNotImplemented)
+    }
+}
+
+impl Drop for UiaRuntime {
+    fn drop(&mut self) {
+        if self.co_uninit_on_drop {
+            unsafe { CoUninitialize() };
+        }
+    }
+}

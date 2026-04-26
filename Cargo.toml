@@ -4,6 +4,7 @@ members = [
     "crates/nav-core",
     "crates/nav-bench",
     "crates/nav-input",
+    "crates/nav-uia",
     "crates/nav-app",
 ]
 
@@ -17,6 +18,7 @@ license = "MIT OR Apache-2.0"
 # Internal (add path crates as they land; see Agent/workflow/02-folder-structure.md)
 nav-core = { path = "crates/nav-core" }
 nav-input = { path = "crates/nav-input" }
+nav-uia = { path = "crates/nav-uia" }
 
 # External — versions pinned via Cargo.lock; bump deliberately.
 windows = "0.59"

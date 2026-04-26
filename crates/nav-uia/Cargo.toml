@@ -1,0 +1,18 @@
+[package]
+name = "nav-uia"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "UI Automation client for Navigator (enumeration, patterns, coordinates)."
+
+[dependencies]
+nav-core = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Accessibility",
+] }
