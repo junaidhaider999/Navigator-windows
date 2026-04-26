@@ -12,9 +12,9 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     HWND_TOPMOST, LWA_ALPHA, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassExW,
-    SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetLayeredWindowAttributes, SetWindowPos,
-    ShowWindow, TranslateMessage, UnregisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DESTROY,
-    WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SetLayeredWindowAttributes, SetWindowPos, ShowWindow,
+    TranslateMessage, UnregisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DESTROY, WNDCLASS_STYLES,
+    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
@@ -26,9 +26,19 @@ use crate::monitors::primary_monitor_rect;
 const CLASS_NAME: PCWSTR = w!("Navigator.RenderOverlay.C2");
 
 pub(crate) enum RenderCmd {
-    Show { session_id: u64, hints: Vec<Hint> },
-    Repaint { session_id: u64, hints: Vec<Hint> },
-    Hide { session_id: u64 },
+    /// Create hidden overlay HWND + D3D/D2D/DComp once at app boot (D2).
+    Prewarm,
+    Show {
+        session_id: u64,
+        hints: Vec<Hint>,
+    },
+    Repaint {
+        session_id: u64,
+        hints: Vec<Hint>,
+    },
+    Hide {
+        session_id: u64,
+    },
     Shutdown,
 }
 
@@ -69,6 +79,13 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
         select! {
             recv(cmd_rx) -> cmd => {
                 match cmd {
+                    Ok(RenderCmd::Prewarm) => {
+                        match unsafe { prewarm_overlay(&mut hwnd, &mut instance, &mut gpu, &mut visible) }
+                        {
+                            Ok(()) => {}
+                            Err(e) => eprintln!("[render] prewarm failed: {e}"),
+                        }
+                    }
                     Ok(RenderCmd::Show { session_id, hints }) => {
                         if session_id <= max_show_accepted {
                             continue;
@@ -104,6 +121,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     }
                     Ok(RenderCmd::Shutdown) | Err(_) => {
                         unsafe { hide_overlay(&mut hwnd, &mut gpu, &mut visible, &mut displayed_session) };
+                        drop(gpu.take());
                         if let (Some(h), Some(inst)) = (hwnd.take(), instance.take()) {
                             unsafe {
                                 let _ = DestroyWindow(h);
@@ -153,13 +171,12 @@ fn pump_all_thread_messages() {
     }
 }
 
-unsafe fn show_overlay(
+/// Creates the overlay HWND (once), positions it on the primary monitor, and sets layered alpha.
+/// Does not show the window or touch the GPU stack.
+unsafe fn prepare_overlay_surface(
     hwnd_slot: &mut Option<HWND>,
     instance_slot: &mut Option<HINSTANCE>,
-    gpu: &mut Option<D2dCompositionRenderer>,
-    visible: &mut bool,
-    hints: &[Hint],
-) -> Result<(), RenderError> {
+) -> Result<HWND, RenderError> {
     let area = primary_monitor_rect()?;
     let w = area.right - area.left;
     let h = area.bottom - area.top;
@@ -224,21 +241,48 @@ unsafe fn show_overlay(
         area.top,
         w,
         h,
-        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        SWP_NOACTIVATE,
     )
     .map_err(|e| RenderError::Win32(e.to_string()))?;
 
-    // Layered popups need per-window alpha before DXGI/DComp can target them reliably.
-    unsafe {
-        SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)
-            .map_err(|e| RenderError::Win32(format!("SetLayeredWindowAttributes: {e}")))?;
-    }
+    SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)
+        .map_err(|e| RenderError::Win32(format!("SetLayeredWindowAttributes: {e}")))?;
 
-    *gpu = Some(D2dCompositionRenderer::new(hwnd)?);
+    Ok(hwnd)
+}
+
+unsafe fn prewarm_overlay(
+    hwnd_slot: &mut Option<HWND>,
+    instance_slot: &mut Option<HINSTANCE>,
+    gpu: &mut Option<D2dCompositionRenderer>,
+    visible: &mut bool,
+) -> Result<(), RenderError> {
+    let hwnd = prepare_overlay_surface(hwnd_slot, instance_slot)?;
+    if gpu.is_none() {
+        *gpu = Some(D2dCompositionRenderer::new(hwnd)?);
+    }
+    if let Some(ref mut g) = *gpu {
+        g.update_and_present(&[])?;
+    }
+    let _ = ShowWindow(hwnd, SW_HIDE);
+    *visible = false;
+    Ok(())
+}
+
+unsafe fn show_overlay(
+    hwnd_slot: &mut Option<HWND>,
+    instance_slot: &mut Option<HINSTANCE>,
+    gpu: &mut Option<D2dCompositionRenderer>,
+    visible: &mut bool,
+    hints: &[Hint],
+) -> Result<(), RenderError> {
+    let hwnd = prepare_overlay_surface(hwnd_slot, instance_slot)?;
+    if gpu.is_none() {
+        *gpu = Some(D2dCompositionRenderer::new(hwnd)?);
+    }
     if let Some(ref mut g) = *gpu {
         g.update_and_present(hints)?;
     }
-
     let _ = ShowWindow(hwnd, SW_SHOW);
     *visible = true;
     Ok(())
@@ -246,13 +290,13 @@ unsafe fn show_overlay(
 
 unsafe fn hide_overlay(
     hwnd_slot: &mut Option<HWND>,
-    gpu: &mut Option<D2dCompositionRenderer>,
+    _gpu: &mut Option<D2dCompositionRenderer>,
     visible: &mut bool,
     displayed_session: &mut Option<u64>,
 ) {
     *visible = false;
     *displayed_session = None;
-    *gpu = None;
+    // Keep D3D/D2D/DComp alive between sessions (D2 pre-warm).
     if let Some(h) = *hwnd_slot {
         let _ = ShowWindow(h, SW_HIDE);
     }

@@ -45,6 +45,13 @@ impl Renderer {
         })
     }
 
+    /// Warms the overlay HWND and GPU stack while hidden (D2). Safe to call once after [`spawn`](Self::spawn).
+    pub fn prewarm(&self) -> Result<(), RenderError> {
+        self.cmd
+            .send(overlay::RenderCmd::Prewarm)
+            .map_err(|_| RenderError::Disconnected)
+    }
+
     /// Shows the overlay for `session_id`. `hints` are copied to the worker; C2 draws the demo
     /// pill strip (see `04-build-order.md`); C3 will use real bounds.
     pub fn show(&self, session_id: u64, hints: &[Hint]) -> Result<(), RenderError> {
@@ -102,6 +109,10 @@ pub struct Renderer {
 #[cfg(not(windows))]
 impl Renderer {
     pub fn spawn() -> Result<Self, RenderError> {
+        Err(RenderError::UnsupportedPlatform)
+    }
+
+    pub fn prewarm(&self) -> Result<(), RenderError> {
         Err(RenderError::UnsupportedPlatform)
     }
 }

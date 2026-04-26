@@ -188,6 +188,11 @@ shippable in *concept* at this point.
 - **Goal:** first hotkey is as fast as the thousandth.
 - **Touches:** `nav-app/main.rs`, `nav-uia/runtime.rs`,
   `nav-render/overlay.rs`.
+- **Implemented:** `Renderer::prewarm()` → `RenderCmd::Prewarm`; overlay thread
+  creates/positions the layered HWND, builds `D2dCompositionRenderer` once,
+  runs `update_and_present(&[])` while hidden, then `ShowWindow(SW_HIDE)`;
+  `hide_overlay` no longer drops the GPU; `Shutdown` clears `gpu` before
+  `DestroyWindow`.
 - **Done when:**
   - At app launch we eagerly: init COM in workers, build UIA cache request,
     create overlay windows hidden, init D3D/D2D devices, allocate brushes

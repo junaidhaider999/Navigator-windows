@@ -67,6 +67,9 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(1);
         }
     };
+    if let Err(e) = renderer.prewarm() {
+        eprintln!("render prewarm: {e}");
+    }
     let enum_opts = EnumOptions::default();
     let mut overlay_session: u64 = 0;
     let mut active_show_id: Option<u64> = None;

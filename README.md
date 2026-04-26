@@ -6,9 +6,9 @@
 ## Status
 
 **Phase C (MVP path) is implemented:** `Alt+;` → UIA enumerate → `nav-core` plan
-+ session → overlay pills → type labels → UIA invoke; Esc and second hotkey
-cancel cleanly. Enumeration is still **uncached** (hundreds of ms on large
-trees); Phase D is optimization. See
+→ session → overlay pills → type labels → UIA invoke; Esc and second hotkey
+cancel cleanly. Enumeration uses a UIA cache (D1) but can still be slow on very
+large trees; Phase D continues with pre-warm (D2) and further optimization. See
 [Agent/workflow/10-milestones.md](Agent/workflow/10-milestones.md) for the
 milestone table.
 
