@@ -71,8 +71,11 @@ pub fn invoke_invoke_pattern(
         unsafe { all.GetElement(idx) }.map_err(|e| UiaError::Operation(e.to_string()))?
     };
 
-    let pat = unsafe { el.GetCachedPattern(UIA_InvokePatternId) }
-        .map_err(|e| UiaError::Operation(e.to_string()))?;
+    let pat = match unsafe { el.GetCachedPattern(UIA_InvokePatternId) } {
+        Ok(p) => p,
+        Err(_) => unsafe { el.GetCurrentPattern(UIA_InvokePatternId) }
+            .map_err(|e| UiaError::Operation(format!("Invoke pattern (cached+current): {e}")))?,
+    };
     let invoke: IUIAutomationInvokePattern =
         pat.cast().map_err(|e| UiaError::Operation(e.to_string()))?;
     unsafe { invoke.Invoke() }.map_err(|e| UiaError::Operation(e.to_string()))?;

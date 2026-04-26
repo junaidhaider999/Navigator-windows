@@ -13,21 +13,49 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, CUIAutomation8, IUIAutomation, IUIAutomationCacheRequest,
-    IUIAutomationElementArray, TreeScope_Children, TreeScope_Descendants,
+    IUIAutomationCondition, IUIAutomationElement, IUIAutomationElementArray, TreeScope,
+    TreeScope_Children, TreeScope_Descendants,
 };
-use windows::core::BSTR;
+use windows::core::{BSTR, Error as WinError};
 
 use crate::UiaError;
 use crate::cache::create_enumeration_cache_request;
 use crate::coords::rect_from_uia_bounds;
 use crate::hwnd::UiaHwnd;
 use crate::options::EnumOptions;
-use crate::pattern::has_invoke_pattern_cached;
+use crate::pattern::{has_invoke_pattern_cached, has_invoke_pattern_current};
 
 /// Descendant count at or above which we consider splitting root children across a pool (D3).
 const PARALLEL_DESCENDANT_MIN: i32 = 256;
 /// Need at least this many distinct native HWND subtrees to pay for Rayon + per-thread COM.
 const MIN_PARALLEL_HWND_SUBTREES: usize = 2;
+
+/// Some providers return "Pattern not found" when building a cache that includes Invoke; fall back to `FindAll`.
+fn is_pattern_cache_build_failure(err: &WinError) -> bool {
+    let s = err.to_string();
+    s.contains("Pattern not found")
+        || s.contains("0x80040201")
+        || s.contains("0x802A0105")
+        || s.contains("PATTERNNOTFOUND")
+}
+
+fn descendants_cached_or_uncached(
+    el: &IUIAutomationElement,
+    scope: TreeScope,
+    true_cond: &IUIAutomationCondition,
+    cache: &IUIAutomationCacheRequest,
+) -> Result<(IUIAutomationElementArray, bool), UiaError> {
+    match unsafe { el.FindAllBuildCache(scope, true_cond, cache) } {
+        Ok(a) => Ok((a, true)),
+        Err(e) if is_pattern_cache_build_failure(&e) => {
+            let a = unsafe { el.FindAll(scope, true_cond) }.map_err(|e2| {
+                UiaError::Operation(format!("FindAllBuildCache: {e}; FindAll fallback: {e2}"))
+            })?;
+            Ok((a, false))
+        }
+        Err(e) => Err(UiaError::Operation(format!("FindAllBuildCache: {e}"))),
+    }
+}
 
 /// Cached enumeration: `FindAllBuildCache` + invoke / bounds / enabled filters.
 pub fn enumerate_baseline(
@@ -46,21 +74,34 @@ pub fn enumerate_baseline(
     let true_cond = unsafe { automation.CreateTrueCondition() }
         .map_err(|e| UiaError::Operation(e.to_string()))?;
 
-    let all = unsafe { root.FindAllBuildCache(TreeScope_Descendants, &true_cond, cache) }
-        .map_err(|e| UiaError::Operation(format!("FindAllBuildCache: {e}")))?;
+    let (all, root_cached) =
+        descendants_cached_or_uncached(&root, TreeScope_Descendants, &true_cond, cache)?;
 
     let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
 
-    if len < PARALLEL_DESCENDANT_MIN {
-        return collect_from_descendants_array(&all, opts, None, None);
+    if !root_cached {
+        return collect_from_descendants_array(&all, opts, None, None, false);
     }
 
-    let kids = unsafe { root.FindAllBuildCache(TreeScope_Children, &true_cond, cache) }
-        .map_err(|e| UiaError::Operation(format!("FindAllBuildCache Children: {e}")))?;
+    if len < PARALLEL_DESCENDANT_MIN {
+        return collect_from_descendants_array(&all, opts, None, None, true);
+    }
+
+    let kids = match unsafe { root.FindAllBuildCache(TreeScope_Children, &true_cond, cache) } {
+        Ok(k) => k,
+        Err(e) if is_pattern_cache_build_failure(&e) => {
+            return collect_from_descendants_array(&all, opts, None, None, true);
+        }
+        Err(e) => {
+            return Err(UiaError::Operation(format!(
+                "FindAllBuildCache Children: {e}"
+            )));
+        }
+    };
     let n_children = unsafe { kids.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
 
     if n_children <= 1 {
-        return collect_from_descendants_array(&all, opts, None, None);
+        return collect_from_descendants_array(&all, opts, None, None, true);
     }
 
     let mut hwnd_subtrees: Vec<HWND> = Vec::new();
@@ -84,7 +125,7 @@ pub fn enumerate_baseline(
     hwnd_subtrees.retain(|h| *h != hwnd);
 
     if hwnd_subtrees.len() < MIN_PARALLEL_HWND_SUBTREES {
-        return collect_from_descendants_array(&all, opts, None, None);
+        return collect_from_descendants_array(&all, opts, None, None, true);
     }
 
     let opts_arc = Arc::new(opts.clone());
@@ -100,18 +141,19 @@ pub fn enumerate_baseline(
 
     let mut merged: Vec<RawHint> = match parallel {
         Ok(parts) => parts.into_iter().flatten().collect(),
-        Err(_) => return collect_from_descendants_array(&all, opts, None, None),
+        Err(_) => return collect_from_descendants_array(&all, opts, None, None, true),
     };
 
     for &j in &no_hwnd_indices {
         let el = unsafe { kids.GetElement(j) }.map_err(|e| UiaError::Operation(e.to_string()))?;
-        let sub = unsafe { el.FindAllBuildCache(TreeScope_Descendants, &true_cond, cache) }
-            .map_err(|e| UiaError::Operation(format!("subtree FindAllBuildCache: {e}")))?;
+        let (sub, sub_cached) =
+            descendants_cached_or_uncached(&el, TreeScope_Descendants, &true_cond, cache)?;
         merged.append(&mut collect_from_descendants_array(
             &sub,
             opts,
             None,
             Some(j as u32),
+            sub_cached,
         )?);
     }
 
@@ -131,6 +173,7 @@ fn collect_from_descendants_array(
     opts: &EnumOptions,
     scope_hwnd: Option<HWND>,
     child_index: Option<u32>,
+    patterns_from_cache: bool,
 ) -> Result<Vec<RawHint>, UiaError> {
     let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
     let mut out = Vec::new();
@@ -145,7 +188,12 @@ fn collect_from_descendants_array(
             Err(e) => return Err(UiaError::Operation(e.to_string())),
         };
 
-        if !has_invoke_pattern_cached(&el) {
+        let has_invoke = if patterns_from_cache {
+            has_invoke_pattern_cached(&el)
+        } else {
+            has_invoke_pattern_current(&el)
+        };
+        if !has_invoke {
             continue;
         }
 
@@ -272,8 +320,8 @@ fn enumerate_hwnd_subtree_parallel(
             .map_err(|e| UiaError::Operation(e.to_string()))?;
         let true_cond = unsafe { automation.CreateTrueCondition() }
             .map_err(|e| UiaError::Operation(e.to_string()))?;
-        let all = unsafe { root.FindAllBuildCache(TreeScope_Descendants, &true_cond, cache) }
-            .map_err(|e| UiaError::Operation(format!("FindAllBuildCache: {e}")))?;
-        collect_from_descendants_array(&all, opts, Some(sub), None)
+        let (all, cached) =
+            descendants_cached_or_uncached(&root, TreeScope_Descendants, &true_cond, cache)?;
+        collect_from_descendants_array(&all, opts, Some(sub), None, cached)
     })
 }
