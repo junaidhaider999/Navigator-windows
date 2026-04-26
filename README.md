@@ -18,6 +18,11 @@ git config core.hooksPath tools/git-hooks
 cargo check --workspace
 ```
 
+The pre-commit hook refuses any commit that stages changes under `legacy/`
+(see `tools/git-hooks/pre-commit`). Replay or bulk edits that touch `legacy/`
+must use `git commit --no-verify` only when intentional, per
+`Agent/workflow/11-legacy-migration.md`.
+
 The shipping binary will be `nav-app.exe` once the `nav-app` crate exists (M1+).
 The legacy Hunt-and-Peck (HAP) C# sources exist only under [`legacy/`](legacy/).
 
