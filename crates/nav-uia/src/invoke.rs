@@ -44,13 +44,9 @@ pub fn invoke_invoke_pattern(
         let root = unsafe { automation.ElementFromHandle(base) }
             .map_err(|e| UiaError::Operation(e.to_string()))?;
         let all = unsafe {
-            root.FindAllBuildCache(
-                TreeScope_Descendants,
-                find_descendants_cond,
-                find_cache,
-            )
+            root.FindAllBuildCache(TreeScope_Descendants, find_descendants_cond, find_cache)
         }
-            .map_err(|e| UiaError::Operation(format!("FindAllBuildCache (scoped hwnd): {e}")))?;
+        .map_err(|e| UiaError::Operation(format!("FindAllBuildCache (scoped hwnd): {e}")))?;
         let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
         bounds_check(idx, len)?;
         unsafe { all.GetElement(idx) }.map_err(|e| UiaError::Operation(e.to_string()))?
@@ -68,11 +64,7 @@ pub fn invoke_invoke_pattern(
         let subroot = unsafe { kids.GetElement(ci as i32) }
             .map_err(|e| UiaError::Operation(e.to_string()))?;
         let all = unsafe {
-            subroot.FindAllBuildCache(
-                TreeScope_Descendants,
-                find_descendants_cond,
-                find_cache,
-            )
+            subroot.FindAllBuildCache(TreeScope_Descendants, find_descendants_cond, find_cache)
         }
         .map_err(|e| UiaError::Operation(format!("FindAllBuildCache subtree: {e}")))?;
         let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
@@ -82,11 +74,7 @@ pub fn invoke_invoke_pattern(
         let root = unsafe { automation.ElementFromHandle(hwnd) }
             .map_err(|e| UiaError::Operation(e.to_string()))?;
         let all = unsafe {
-            root.FindAllBuildCache(
-                TreeScope_Descendants,
-                find_descendants_cond,
-                find_cache,
-            )
+            root.FindAllBuildCache(TreeScope_Descendants, find_descendants_cond, find_cache)
         }
         .map_err(|e| UiaError::Operation(format!("FindAllBuildCache: {e}")))?;
         let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;

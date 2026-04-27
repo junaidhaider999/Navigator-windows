@@ -9,9 +9,8 @@ use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0
 use windows::Win32::UI::Accessibility::{
     AutomationElementMode_Full, AutomationElementMode_None, IUIAutomation,
     IUIAutomationCacheRequest, IUIAutomationCondition, TreeScope_Element,
-    UIA_BoundingRectanglePropertyId, UIA_IsEnabledPropertyId,
-    UIA_IsInvokePatternAvailablePropertyId, UIA_IsOffscreenPropertyId, UIA_InvokePatternId,
-    UIA_NamePropertyId,
+    UIA_BoundingRectanglePropertyId, UIA_InvokePatternId, UIA_IsEnabledPropertyId,
+    UIA_IsInvokePatternAvailablePropertyId, UIA_IsOffscreenPropertyId, UIA_NamePropertyId,
 };
 
 use crate::UiaError;
@@ -44,12 +43,16 @@ pub fn create_invoke_targets_find_condition(
 
         let mut acc: IUIAutomationCondition = automation
             .CreatePropertyCondition(UIA_IsInvokePatternAvailablePropertyId, &v_true)
-            .map_err(|e| UiaError::Operation(format!("CreatePropertyCondition IsInvokeAvailable: {e}")))?;
+            .map_err(|e| {
+                UiaError::Operation(format!("CreatePropertyCondition IsInvokeAvailable: {e}"))
+            })?;
 
         if !opts.include_disabled {
             let c = automation
                 .CreatePropertyCondition(UIA_IsEnabledPropertyId, &v_true)
-                .map_err(|e| UiaError::Operation(format!("CreatePropertyCondition IsEnabled: {e}")))?;
+                .map_err(|e| {
+                    UiaError::Operation(format!("CreatePropertyCondition IsEnabled: {e}"))
+                })?;
             acc = automation
                 .CreateAndCondition(&acc, &c)
                 .map_err(|e| UiaError::Operation(format!("CreateAndCondition (enabled): {e}")))?;
@@ -58,7 +61,9 @@ pub fn create_invoke_targets_find_condition(
         if !opts.include_offscreen {
             let c = automation
                 .CreatePropertyCondition(UIA_IsOffscreenPropertyId, &v_false)
-                .map_err(|e| UiaError::Operation(format!("CreatePropertyCondition IsOffscreen: {e}")))?;
+                .map_err(|e| {
+                    UiaError::Operation(format!("CreatePropertyCondition IsOffscreen: {e}"))
+                })?;
             acc = automation
                 .CreateAndCondition(&acc, &c)
                 .map_err(|e| UiaError::Operation(format!("CreateAndCondition (offscreen): {e}")))?;

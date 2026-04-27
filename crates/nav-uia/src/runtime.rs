@@ -134,25 +134,14 @@ impl UiaRuntime {
             ));
         }
         let find_cond = self.find_descendants_condition(opts)?;
-        enumerate_baseline(
-            &self.automation,
-            hwnd,
-            opts,
-            &self.enum_cache,
-            &find_cond,
-        )
+        enumerate_baseline(&self.automation, hwnd, opts, &self.enum_cache, &find_cond)
     }
 
     /// Pattern dispatch: `Invoke` on the element located at the same `FindAll` index as enumeration.
     ///
     /// `opts` must match the [`EnumOptions`] used for the preceding [`UiaRuntime::enumerate`] call
     /// so descendant filtering stays consistent with `element_id`.
-    pub fn invoke(
-        &self,
-        hwnd: UiaHwnd,
-        hint: &Hint,
-        opts: &EnumOptions,
-    ) -> Result<(), UiaError> {
+    pub fn invoke(&self, hwnd: UiaHwnd, hint: &Hint, opts: &EnumOptions) -> Result<(), UiaError> {
         let find_cond = self.find_descendants_condition(opts)?;
         invoke_invoke_pattern(
             &self.automation,

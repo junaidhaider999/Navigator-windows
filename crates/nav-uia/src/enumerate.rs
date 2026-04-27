@@ -78,12 +78,8 @@ pub fn enumerate_baseline(
     let true_cond = unsafe { automation.CreateTrueCondition() }
         .map_err(|e| UiaError::Operation(e.to_string()))?;
 
-    let (all, root_cached) = descendants_cached_or_uncached(
-        &root,
-        TreeScope_Descendants,
-        find_descendants_cond,
-        cache,
-    )?;
+    let (all, root_cached) =
+        descendants_cached_or_uncached(&root, TreeScope_Descendants, find_descendants_cond, cache)?;
 
     let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
 
