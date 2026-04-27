@@ -198,7 +198,12 @@ fn collect_from_descendants_array(
         }
 
         if !opts.include_disabled {
-            match unsafe { el.CurrentIsEnabled() } {
+            let enabled = if patterns_from_cache {
+                unsafe { el.CachedIsEnabled() }
+            } else {
+                unsafe { el.CurrentIsEnabled() }
+            };
+            match enabled {
                 Ok(b) if !b.as_bool() => continue,
                 Err(_) => continue,
                 _ => {}
@@ -206,14 +211,24 @@ fn collect_from_descendants_array(
         }
 
         if !opts.include_offscreen {
-            match unsafe { el.CurrentIsOffscreen() } {
+            let offscreen = if patterns_from_cache {
+                unsafe { el.CachedIsOffscreen() }
+            } else {
+                unsafe { el.CurrentIsOffscreen() }
+            };
+            match offscreen {
                 Ok(b) if b.as_bool() => continue,
                 Err(_) => {}
                 _ => {}
             }
         }
 
-        let rect = match unsafe { el.CurrentBoundingRectangle() } {
+        let bounds = if patterns_from_cache {
+            unsafe { el.CachedBoundingRectangle() }
+        } else {
+            unsafe { el.CurrentBoundingRectangle() }
+        };
+        let rect = match bounds {
             Ok(r) => match rect_from_uia_bounds(r) {
                 Some(r) => r,
                 None => continue,
@@ -221,7 +236,7 @@ fn collect_from_descendants_array(
             Err(_) => continue,
         };
 
-        let name = read_optional_name(&el);
+        let name = read_optional_name(&el, patterns_from_cache);
 
         out.push(RawHint {
             element_id: i as u64,
@@ -243,8 +258,13 @@ fn collect_from_descendants_array(
 
 fn read_optional_name(
     el: &windows::Win32::UI::Accessibility::IUIAutomationElement,
+    from_cache: bool,
 ) -> Option<Box<str>> {
-    let bstr: BSTR = unsafe { el.CurrentName() }.ok()?;
+    let bstr: BSTR = if from_cache {
+        unsafe { el.CachedName() }.ok()?
+    } else {
+        unsafe { el.CurrentName() }.ok()?
+    };
     let s = bstr.to_string();
     if s.is_empty() {
         None
