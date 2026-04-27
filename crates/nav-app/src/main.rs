@@ -14,7 +14,7 @@ fn main() -> std::process::ExitCode {
     use std::sync::atomic::Ordering;
 
     use clap::Parser;
-    use nav_core::{Session, SessionEvent, plan, NavEnumerateResult};
+    use nav_core::{NavEnumerateResult, Session, SessionEvent, plan};
     use nav_input::{InputEvent, InputThread, SessionKey};
     use nav_render::Renderer;
     use nav_uia::{EnumOptions, UiaRuntime};

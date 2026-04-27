@@ -1,7 +1,9 @@
 //! Physical left-click at screen coordinates (fallback when UIA patterns are insufficient).
 
 use nav_core::Rect;
-use windows::Win32::UI::Input::KeyboardAndMouse::{MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, mouse_event};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, mouse_event,
+};
 use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
 use crate::UiaError;

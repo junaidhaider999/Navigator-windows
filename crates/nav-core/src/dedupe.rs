@@ -82,11 +82,13 @@ fn dedupe_by_runtime_fp(candidates: Vec<RawHint>) -> Vec<RawHint> {
     for h in candidates {
         match h.uia_runtime_id_fp {
             Some(fp) => {
-                best.entry(fp).and_modify(|e| {
-                    if keep_a_over_b(&h, e) {
-                        *e = h.clone();
-                    }
-                }).or_insert(h);
+                best.entry(fp)
+                    .and_modify(|e| {
+                        if keep_a_over_b(&h, e) {
+                            *e = h.clone();
+                        }
+                    })
+                    .or_insert(h);
             }
             None => rest.push(h),
         }
@@ -118,11 +120,13 @@ fn dedupe_by_bounds_and_name(candidates: Vec<RawHint>) -> Vec<RawHint> {
             h.bounds.h,
             name_fp(&h.name),
         );
-        best.entry(k).and_modify(|e| {
-            if keep_a_over_b(&h, e) {
-                *e = h.clone();
-            }
-        }).or_insert(h);
+        best.entry(k)
+            .and_modify(|e| {
+                if keep_a_over_b(&h, e) {
+                    *e = h.clone();
+                }
+            })
+            .or_insert(h);
     }
     best.into_values().collect()
 }
@@ -142,11 +146,13 @@ fn dedupe_by_center_grid(candidates: Vec<RawHint>) -> Vec<RawHint> {
     let mut best: HashMap<(i32, i32), RawHint> = HashMap::new();
     for h in candidates {
         let key = center_cell(&h.bounds);
-        best.entry(key).and_modify(|e| {
-            if keep_a_over_b(&h, e) {
-                *e = h.clone();
-            }
-        }).or_insert(h);
+        best.entry(key)
+            .and_modify(|e| {
+                if keep_a_over_b(&h, e) {
+                    *e = h.clone();
+                }
+            })
+            .or_insert(h);
     }
     best.into_values().collect()
 }
@@ -242,16 +248,7 @@ mod tests {
 
     #[test]
     fn center_grid_merges_overlapping_targets() {
-        let a = h(
-            0,
-            0,
-            0,
-            10,
-            10,
-            ElementKind::Invoke,
-            None,
-            Some("x"),
-        );
+        let a = h(0, 0, 0, 10, 10, ElementKind::Invoke, None, Some("x"));
         let b = h(
             1,
             2,
@@ -268,26 +265,8 @@ mod tests {
 
     #[test]
     fn parent_suppressed_when_child_claims_center() {
-        let parent = h(
-            0,
-            0,
-            0,
-            200,
-            200,
-            ElementKind::Invoke,
-            None,
-            None,
-        );
-        let child = h(
-            1,
-            80,
-            80,
-            40,
-            40,
-            ElementKind::Invoke,
-            None,
-            None,
-        );
+        let parent = h(0, 0, 0, 200, 200, ElementKind::Invoke, None, None);
+        let child = h(1, 80, 80, 40, 40, ElementKind::Invoke, None, None);
         let (out, st) = dedupe_raw_hints(vec![parent, child.clone()]);
         assert_eq!(out.len(), 1, "{out:?}");
         assert_eq!(out[0].element_id, 1);

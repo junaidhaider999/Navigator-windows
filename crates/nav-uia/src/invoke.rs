@@ -7,9 +7,9 @@ use nav_core::{ElementKind, Hint};
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::UI::Accessibility::{
     ExpandCollapseState_Collapsed, ExpandCollapseState_LeafNode,
-    ExpandCollapseState_PartiallyExpanded, IUIAutomation,
-    IUIAutomationCacheRequest, IUIAutomationCondition, IUIAutomationElement,
-    IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern, IUIAutomationLegacyIAccessiblePattern,
+    ExpandCollapseState_PartiallyExpanded, IUIAutomation, IUIAutomationCacheRequest,
+    IUIAutomationCondition, IUIAutomationElement, IUIAutomationExpandCollapsePattern,
+    IUIAutomationInvokePattern, IUIAutomationLegacyIAccessiblePattern,
     IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern, TreeScope_Children,
     TreeScope_Descendants, UIA_ExpandCollapsePatternId, UIA_InvokePatternId,
     UIA_LegacyIAccessiblePatternId, UIA_SelectionItemPatternId, UIA_TogglePatternId,
@@ -37,8 +37,7 @@ pub fn invoke_invoke_pattern(
     if fg != hwnd {
         eprintln!(
             "[invoke] warn: foreground_hwnd=0x{:x} session_hwnd=0x{:x}",
-            fg.0 as usize,
-            hwnd.0 as usize
+            fg.0 as usize, hwnd.0 as usize
         );
     }
 
@@ -154,9 +153,8 @@ fn element_at_hint_center(
     let r = hint.raw.bounds;
     let cx = r.x + r.w / 2;
     let cy = r.y + r.h / 2;
-    unsafe { automation.ElementFromPoint(POINT { x: cx, y: cy }) }.map_err(|e| {
-        UiaError::Operation(format!("ElementFromPoint({cx},{cy}): {e}"))
-    })
+    unsafe { automation.ElementFromPoint(POINT { x: cx, y: cy }) }
+        .map_err(|e| UiaError::Operation(format!("ElementFromPoint({cx},{cy}): {e}")))
 }
 
 fn bounds_check(idx: i32, len: i32) -> Result<(), UiaError> {
@@ -175,9 +173,7 @@ fn pattern_cached_or_current(
     match unsafe { el.GetCachedPattern(id) } {
         Ok(p) => Ok(p),
         Err(e1) => unsafe { el.GetCurrentPattern(id) }.map_err(|e2| {
-            UiaError::Operation(format!(
-                "GetCachedPattern: {e1}; GetCurrentPattern: {e2}"
-            ))
+            UiaError::Operation(format!("GetCachedPattern: {e1}; GetCurrentPattern: {e2}"))
         }),
     }
 }
@@ -195,8 +191,7 @@ fn try_universal_action_chain(el: &IUIAutomationElement) -> Result<(), UiaError>
     if try_legacy_default_only(el).is_ok() {
         return Ok(());
     }
-    unsafe { el.SetFocus() }
-        .map_err(|e| UiaError::Operation(format!("SetFocus: {e}")))
+    unsafe { el.SetFocus() }.map_err(|e| UiaError::Operation(format!("SetFocus: {e}")))
 }
 
 fn try_invoke_only(el: &IUIAutomationElement) -> Result<(), UiaError> {

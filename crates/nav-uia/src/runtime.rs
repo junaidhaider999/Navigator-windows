@@ -131,7 +131,11 @@ impl UiaRuntime {
     /// When [`EnumOptions::debug_overlay`](crate::options::EnumOptions::debug_overlay) is set,
     /// `debug_rejects` lists nodes that matched the provider filter but were dropped in Rust
     /// (for visualization).
-    pub fn enumerate(&self, hwnd: UiaHwnd, opts: &EnumOptions) -> Result<NavEnumerateResult, UiaError> {
+    pub fn enumerate(
+        &self,
+        hwnd: UiaHwnd,
+        opts: &EnumOptions,
+    ) -> Result<NavEnumerateResult, UiaError> {
         if opts.fallback == FallbackPolicy::MsaaOnly {
             return Err(UiaError::UnsupportedConfiguration(
                 "MsaaOnly is not implemented in the B3 baseline",

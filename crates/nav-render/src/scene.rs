@@ -7,7 +7,6 @@
 use std::collections::{HashMap, HashSet};
 
 use nav_core::{Hint, UiaDebugReject};
-use windows::core::Interface;
 use windows::Win32::Graphics::Direct2D::Common::{D2D_POINT_2F, D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_DRAW_TEXT_OPTIONS_CLIP,
@@ -18,6 +17,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, IDWriteFactory,
     IDWriteTextFormat,
 };
+use windows::core::Interface;
 
 use crate::RenderError;
 
@@ -73,10 +73,7 @@ fn connector_equal(
     b: Option<(D2D_POINT_2F, D2D_POINT_2F)>,
 ) -> bool {
     match (a, b) {
-        (
-            Some((pa0, pa1)),
-            Some((pb0, pb1)),
-        ) => points_equal(pa0, pb0) && points_equal(pa1, pb1),
+        (Some((pa0, pa1)), Some((pb0, pb1))) => points_equal(pa0, pb0) && points_equal(pa1, pb1),
         (None, None) => true,
         _ => false,
     }
@@ -97,17 +94,11 @@ pub fn pills_geometrically_equal(a: &[PillGeom], b: &[PillGeom]) -> bool {
     type V = (D2D_RECT_F, f32, Option<(D2D_POINT_2F, D2D_POINT_2F)>);
     let mut ma: HashMap<&str, V> = HashMap::with_capacity(a.len());
     for p in a {
-        ma.insert(
-            p.label.as_str(),
-            (p.rect, p.opacity, p.debug_connector),
-        );
+        ma.insert(p.label.as_str(), (p.rect, p.opacity, p.debug_connector));
     }
     let mut mb: HashMap<&str, V> = HashMap::with_capacity(b.len());
     for p in b {
-        mb.insert(
-            p.label.as_str(),
-            (p.rect, p.opacity, p.debug_connector),
-        );
+        mb.insert(p.label.as_str(), (p.rect, p.opacity, p.debug_connector));
     }
     if ma.len() != mb.len() {
         return false;
@@ -116,8 +107,7 @@ pub fn pills_geometrically_equal(a: &[PillGeom], b: &[PillGeom]) -> bool {
         let Some((r_b, o_b, c_b)) = mb.get(k) else {
             return false;
         };
-        if !(rects_equal(*r_a, *r_b) && opacity_equal(*o_a, *o_b) && connector_equal(*c_a, *c_b))
-        {
+        if !(rects_equal(*r_a, *r_b) && opacity_equal(*o_a, *o_b) && connector_equal(*c_a, *c_b)) {
             return false;
         }
     }
@@ -149,7 +139,8 @@ pub fn overlay_paint_plan(
     client_h: f32,
 ) -> PaintPlan {
     let _ = (client_w, client_h);
-    if pills_geometrically_equal(old_pills, new_pills) && debug_regions_equal(old_debug, new_debug) {
+    if pills_geometrically_equal(old_pills, new_pills) && debug_regions_equal(old_debug, new_debug)
+    {
         PaintPlan::NoOp
     } else {
         PaintPlan::Full
@@ -784,7 +775,14 @@ mod tests {
 
     #[test]
     fn longer_label_increases_pill_width() {
-        let short = pills_for_frame(&[hint_at("a", 1, 0, 0, 40, 40)], (0, 0), 800.0, 600.0, 96.0, false);
+        let short = pills_for_frame(
+            &[hint_at("a", 1, 0, 0, 40, 40)],
+            (0, 0),
+            800.0,
+            600.0,
+            96.0,
+            false,
+        );
         let long = pills_for_frame(
             &[hint_at("abc", 1, 0, 0, 40, 40)],
             (0, 0),

@@ -7,11 +7,11 @@ use std::sync::{Arc, Mutex};
 use nav_core::{Backend, NavEnumerateResult, RawHint, Rect, UiaDebugReject, fnv1a_hash_i32_slice};
 use rayon::prelude::*;
 use windows::Win32::Foundation::{HWND, RECT, RPC_E_CHANGED_MODE};
+use windows::Win32::System::Com::SAFEARRAY;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     CoUninitialize,
 };
-use windows::Win32::System::Com::SAFEARRAY;
 use windows::Win32::System::Ole::{
     SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
 };
@@ -93,15 +93,8 @@ pub fn enumerate_baseline(
     let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
 
     if !root_cached {
-        let hints = collect_from_descendants_array(
-            &all,
-            opts,
-            hwnd,
-            None,
-            None,
-            false,
-            &reject_sink,
-        )?;
+        let hints =
+            collect_from_descendants_array(&all, opts, hwnd, None, None, false, &reject_sink)?;
         return Ok(NavEnumerateResult {
             hints,
             debug_rejects: take_rejects(&reject_sink),
@@ -109,15 +102,8 @@ pub fn enumerate_baseline(
     }
 
     if len < PARALLEL_DESCENDANT_MIN {
-        let hints = collect_from_descendants_array(
-            &all,
-            opts,
-            hwnd,
-            None,
-            None,
-            true,
-            &reject_sink,
-        )?;
+        let hints =
+            collect_from_descendants_array(&all, opts, hwnd, None, None, true, &reject_sink)?;
         return Ok(NavEnumerateResult {
             hints,
             debug_rejects: take_rejects(&reject_sink),
@@ -127,15 +113,8 @@ pub fn enumerate_baseline(
     let kids = match unsafe { root.FindAllBuildCache(TreeScope_Children, &true_cond, cache) } {
         Ok(k) => k,
         Err(e) if is_pattern_cache_build_failure(&e) => {
-            let hints = collect_from_descendants_array(
-                &all,
-                opts,
-                hwnd,
-                None,
-                None,
-                true,
-                &reject_sink,
-            )?;
+            let hints =
+                collect_from_descendants_array(&all, opts, hwnd, None, None, true, &reject_sink)?;
             return Ok(NavEnumerateResult {
                 hints,
                 debug_rejects: take_rejects(&reject_sink),
@@ -150,15 +129,8 @@ pub fn enumerate_baseline(
     let n_children = unsafe { kids.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
 
     if n_children <= 1 {
-        let hints = collect_from_descendants_array(
-            &all,
-            opts,
-            hwnd,
-            None,
-            None,
-            true,
-            &reject_sink,
-        )?;
+        let hints =
+            collect_from_descendants_array(&all, opts, hwnd, None, None, true, &reject_sink)?;
         return Ok(NavEnumerateResult {
             hints,
             debug_rejects: take_rejects(&reject_sink),
@@ -186,15 +158,8 @@ pub fn enumerate_baseline(
     hwnd_subtrees.retain(|h| *h != hwnd);
 
     if hwnd_subtrees.len() < MIN_PARALLEL_HWND_SUBTREES {
-        let hints = collect_from_descendants_array(
-            &all,
-            opts,
-            hwnd,
-            None,
-            None,
-            true,
-            &reject_sink,
-        )?;
+        let hints =
+            collect_from_descendants_array(&all, opts, hwnd, None, None, true, &reject_sink)?;
         return Ok(NavEnumerateResult {
             hints,
             debug_rejects: take_rejects(&reject_sink),
@@ -211,27 +176,15 @@ pub fn enumerate_baseline(
         .map(|&bits| {
             let sub = HWND(bits as *mut c_void);
             let session_root = HWND(session_root_bits as *mut c_void);
-            enumerate_hwnd_subtree_parallel(
-                sub,
-                opts_arc.as_ref(),
-                session_root,
-                &reject_arc,
-            )
+            enumerate_hwnd_subtree_parallel(sub, opts_arc.as_ref(), session_root, &reject_arc)
         })
         .collect();
 
     let mut merged: Vec<RawHint> = match parallel {
         Ok(parts) => parts.into_iter().flatten().collect(),
         Err(_) => {
-            let hints = collect_from_descendants_array(
-                &all,
-                opts,
-                hwnd,
-                None,
-                None,
-                true,
-                &reject_sink,
-            )?;
+            let hints =
+                collect_from_descendants_array(&all, opts, hwnd, None, None, true, &reject_sink)?;
             return Ok(NavEnumerateResult {
                 hints,
                 debug_rejects: take_rejects(&reject_sink),
@@ -290,12 +243,10 @@ fn push_reject(
     let Some(a) = sink else {
         return;
     };
-    a.lock()
-        .unwrap()
-        .push(UiaDebugReject {
-            bounds,
-            reason: reason.into(),
-        });
+    a.lock().unwrap().push(UiaDebugReject {
+        bounds,
+        reason: reason.into(),
+    });
 }
 
 /// FNV-1a hash of UIA `RuntimeId` (stable identity for deduplication).
@@ -321,12 +272,7 @@ unsafe fn runtime_id_from_safearray(psa: *mut SAFEARRAY) -> Option<u64> {
         let mut parts = Vec::with_capacity((u - l + 1) as usize);
         for idx in l..=u {
             let mut v: i32 = 0;
-            SafeArrayGetElement(
-                psa,
-                &idx,
-                &mut v as *mut i32 as *mut c_void,
-            )
-            .ok()?;
+            SafeArrayGetElement(psa, &idx, &mut v as *mut i32 as *mut c_void).ok()?;
             parts.push(v);
         }
         Some(fnv1a_hash_i32_slice(&parts))
@@ -352,10 +298,7 @@ fn rect_center_inside_hwnd(rect: &Rect, root: HWND) -> bool {
     }
     let cx = rect.x + rect.w / 2;
     let cy = rect.y + rect.h / 2;
-    cx >= wr.left
-        && cx < wr.right
-        && cy >= wr.top
-        && cy < wr.bottom
+    cx >= wr.left && cx < wr.right && cy >= wr.top && cy < wr.bottom
 }
 
 fn collect_from_descendants_array(
@@ -387,9 +330,7 @@ fn collect_from_descendants_array(
                     let nm = read_optional_name(&el, patterns_from_cache)
                         .map(|s| s.to_string())
                         .unwrap_or_default();
-                    eprintln!(
-                        "[uia-debug] skip idx={i} reason=no_interaction name={nm:?}"
-                    );
+                    eprintln!("[uia-debug] skip idx={i} reason=no_interaction name={nm:?}");
                 }
                 push_reject(
                     reject_sink,
@@ -492,12 +433,7 @@ fn collect_from_descendants_array(
                     rect.x, rect.y, rect.w, rect.h
                 );
             }
-            push_reject(
-                reject_sink,
-                opts,
-                "outside_root_window",
-                Some(rect),
-            );
+            push_reject(reject_sink, opts, "outside_root_window", Some(rect));
             continue;
         }
 

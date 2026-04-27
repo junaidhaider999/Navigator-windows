@@ -4,10 +4,12 @@
 use std::mem::ManuallyDrop;
 
 use windows::Win32::Foundation::{VARIANT_FALSE, VARIANT_TRUE};
-use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BOOL, VT_I4};
+use windows::Win32::System::Variant::{
+    VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BOOL, VT_I4,
+};
 use windows::Win32::UI::Accessibility::{
     AutomationElementMode_Full, AutomationElementMode_None, IUIAutomation,
-    IUIAutomationCacheRequest, IUIAutomationCondition, TreeScope_Element, UIA_PROPERTY_ID,
+    IUIAutomationCacheRequest, IUIAutomationCondition, TreeScope_Element,
     UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId,
     UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId, UIA_EditControlTypeId,
     UIA_ExpandCollapsePatternId, UIA_HyperlinkControlTypeId, UIA_InvokePatternId,
@@ -15,10 +17,10 @@ use windows::Win32::UI::Accessibility::{
     UIA_IsInvokePatternAvailablePropertyId, UIA_IsKeyboardFocusablePropertyId,
     UIA_IsLegacyIAccessiblePatternAvailablePropertyId, UIA_IsOffscreenPropertyId,
     UIA_IsSelectionItemPatternAvailablePropertyId, UIA_IsTogglePatternAvailablePropertyId,
-    UIA_IsValuePatternAvailablePropertyId, UIA_LegacyIAccessiblePatternId, UIA_ListItemControlTypeId,
-    UIA_MenuItemControlTypeId, UIA_NamePropertyId, UIA_RadioButtonControlTypeId,
-    UIA_SelectionItemPatternId, UIA_SplitButtonControlTypeId, UIA_TabItemControlTypeId,
-    UIA_TogglePatternId, UIA_TreeItemControlTypeId, UIA_ValuePatternId,
+    UIA_IsValuePatternAvailablePropertyId, UIA_LegacyIAccessiblePatternId,
+    UIA_ListItemControlTypeId, UIA_MenuItemControlTypeId, UIA_NamePropertyId, UIA_PROPERTY_ID,
+    UIA_RadioButtonControlTypeId, UIA_SelectionItemPatternId, UIA_SplitButtonControlTypeId,
+    UIA_TabItemControlTypeId, UIA_TogglePatternId, UIA_TreeItemControlTypeId, UIA_ValuePatternId,
 };
 
 use crate::UiaError;
@@ -79,15 +81,16 @@ fn or_control_types(
     let Some(&t0) = types.first() else {
         return Err(UiaError::Operation("empty control type OR".into()));
     };
-    let mut acc = unsafe {
-        automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &v_i4(t0))
-    }
-    .map_err(|e| UiaError::Operation(format!("CreatePropertyCondition ControlType: {e}")))?;
+    let mut acc =
+        unsafe { automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &v_i4(t0)) }
+            .map_err(|e| {
+                UiaError::Operation(format!("CreatePropertyCondition ControlType: {e}"))
+            })?;
     for &t in &types[1..] {
-        let c = unsafe {
-            automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &v_i4(t))
-        }
-        .map_err(|e| UiaError::Operation(format!("CreatePropertyCondition ControlType: {e}")))?;
+        let c = unsafe { automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &v_i4(t)) }
+            .map_err(|e| {
+                UiaError::Operation(format!("CreatePropertyCondition ControlType: {e}"))
+            })?;
         acc = unsafe { automation.CreateOrCondition(&acc, &c) }
             .map_err(|e| UiaError::Operation(format!("CreateOrCondition ControlType: {e}")))?;
     }
@@ -130,7 +133,9 @@ pub fn create_invoke_targets_find_condition(
         let ct_or = or_control_types(automation, &focus_types, variant_i4)?;
         let kb = automation
             .CreatePropertyCondition(UIA_IsKeyboardFocusablePropertyId, &v_true)
-            .map_err(|e| UiaError::Operation(format!("CreatePropertyCondition KeyboardFocusable: {e}")))?;
+            .map_err(|e| {
+                UiaError::Operation(format!("CreatePropertyCondition KeyboardFocusable: {e}"))
+            })?;
         let focus_clickable = automation
             .CreateAndCondition(&kb, &ct_or)
             .map_err(|e| UiaError::Operation(format!("CreateAndCondition focus branch: {e}")))?;
@@ -171,17 +176,23 @@ fn add_cache_patterns_and_properties(
 ) -> Result<(), UiaError> {
     unsafe {
         req.AddProperty(UIA_BoundingRectanglePropertyId)
-            .map_err(|e| UiaError::Operation(format!("{mode_label} AddProperty BoundingRectangle: {e}")))?;
+            .map_err(|e| {
+                UiaError::Operation(format!("{mode_label} AddProperty BoundingRectangle: {e}"))
+            })?;
         req.AddProperty(UIA_IsEnabledPropertyId)
             .map_err(|e| UiaError::Operation(format!("{mode_label} AddProperty IsEnabled: {e}")))?;
-        req.AddProperty(UIA_IsOffscreenPropertyId)
-            .map_err(|e| UiaError::Operation(format!("{mode_label} AddProperty IsOffscreen: {e}")))?;
+        req.AddProperty(UIA_IsOffscreenPropertyId).map_err(|e| {
+            UiaError::Operation(format!("{mode_label} AddProperty IsOffscreen: {e}"))
+        })?;
         req.AddProperty(UIA_NamePropertyId)
             .map_err(|e| UiaError::Operation(format!("{mode_label} AddProperty Name: {e}")))?;
-        req.AddProperty(UIA_ControlTypePropertyId)
-            .map_err(|e| UiaError::Operation(format!("{mode_label} AddProperty ControlType: {e}")))?;
+        req.AddProperty(UIA_ControlTypePropertyId).map_err(|e| {
+            UiaError::Operation(format!("{mode_label} AddProperty ControlType: {e}"))
+        })?;
         req.AddProperty(UIA_IsKeyboardFocusablePropertyId)
-            .map_err(|e| UiaError::Operation(format!("{mode_label} AddProperty IsKeyboardFocusable: {e}")))?;
+            .map_err(|e| {
+                UiaError::Operation(format!("{mode_label} AddProperty IsKeyboardFocusable: {e}"))
+            })?;
         for (label, pid) in [
             ("Invoke", UIA_InvokePatternId),
             ("Toggle", UIA_TogglePatternId),

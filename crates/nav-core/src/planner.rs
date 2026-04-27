@@ -100,10 +100,6 @@ fn priority_score(raw: &RawHint, focus_rect: Rect) -> f32 {
     let size_term = W_SIZE * (1.0 / area);
     // Penalize huge container rects so short labels go to tighter, likely-real targets.
     const LARGE_PX: i64 = 480_000; // ~800x600
-    let large_penalty = if area_i > LARGE_PX {
-        -0.35
-    } else {
-        0.0
-    };
+    let large_penalty = if area_i > LARGE_PX { -0.35 } else { 0.0 };
     W_PROXIMITY * prox + kind + size_term + large_penalty
 }

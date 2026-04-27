@@ -213,7 +213,10 @@ fn partition_hints(hints: &[Hint], monitors: &[RECT]) -> Vec<Vec<Hint>> {
     out
 }
 
-fn partition_debug_rejects(rejects: &[UiaDebugReject], monitors: &[RECT]) -> Vec<Vec<UiaDebugReject>> {
+fn partition_debug_rejects(
+    rejects: &[UiaDebugReject],
+    monitors: &[RECT],
+) -> Vec<Vec<UiaDebugReject>> {
     let mut out: Vec<Vec<UiaDebugReject>> = (0..monitors.len()).map(|_| Vec::new()).collect();
     for r in rejects {
         let Some(b) = r.bounds else {
@@ -292,11 +295,8 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     let monitors: Vec<RECT> = st.slots.iter().map(|s| s.monitor).collect();
                     let parts = partition_hints(&hints, &monitors);
                     let dbg_parts = partition_debug_rejects(&debug_rejects, &monitors);
-                    for ((s, part), dpart) in st
-                        .slots
-                        .iter_mut()
-                        .zip(parts.iter())
-                        .zip(dbg_parts.iter())
+                    for ((s, part), dpart) in
+                        st.slots.iter_mut().zip(parts.iter()).zip(dbg_parts.iter())
                     {
                         if let Some(ref mut g) = s.gpu {
                             g.update_and_present(part, dpart, debug_connectors)?;
@@ -339,11 +339,8 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     let monitors: Vec<RECT> = st.slots.iter().map(|s| s.monitor).collect();
                     let parts = partition_hints(&hints, &monitors);
                     let dbg_parts = partition_debug_rejects(&debug_rejects, &monitors);
-                    for ((s, part), dpart) in st
-                        .slots
-                        .iter_mut()
-                        .zip(parts.iter())
-                        .zip(dbg_parts.iter())
+                    for ((s, part), dpart) in
+                        st.slots.iter_mut().zip(parts.iter()).zip(dbg_parts.iter())
                     {
                         if let Some(ref mut g) = s.gpu {
                             g.update_and_present(part, dpart, debug_connectors)?;

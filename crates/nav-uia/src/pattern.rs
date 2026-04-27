@@ -120,7 +120,10 @@ pub fn classify_interaction_kind(
     keyboard_focusable_interactive(el, from_cache)
 }
 
-fn value_kind_from_control_type(el: &IUIAutomationElement, from_cache: bool) -> Option<ElementKind> {
+fn value_kind_from_control_type(
+    el: &IUIAutomationElement,
+    from_cache: bool,
+) -> Option<ElementKind> {
     let ct = if from_cache {
         unsafe { el.CachedControlType() }.ok()?
     } else {
@@ -129,7 +132,10 @@ fn value_kind_from_control_type(el: &IUIAutomationElement, from_cache: bool) -> 
     use windows::Win32::UI::Accessibility::{
         UIA_ComboBoxControlTypeId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
     };
-    if ct == UIA_EditControlTypeId || ct == UIA_DocumentControlTypeId || ct == UIA_ComboBoxControlTypeId {
+    if ct == UIA_EditControlTypeId
+        || ct == UIA_DocumentControlTypeId
+        || ct == UIA_ComboBoxControlTypeId
+    {
         Some(ElementKind::Editable)
     } else {
         Some(ElementKind::GenericClickable)
