@@ -76,19 +76,21 @@ If you do not have this hardware exactly, your numbers are **provisional**.
 The CI machine on `windows-latest` GitHub-hosted runners is the second
 canonical environment; numbers from there are tracked separately.
 
-## Pre-Phase-D baseline (uncached UIA, real apps)
+## UIA enumeration baselines (real apps)
 
-Before **M6 / D1** lands, `nav-uia` uses a slow **`FindAll(TreeScope_Descendants, …)`**
-walk without a cache request. On a typical dev machine, **hundreds of milliseconds**
-for ~100+ invoke-pattern nodes is expected. Record your machine’s numbers here
-when you change enumeration so Phase D can show a clear delta:
+**D1 is in tree:** default path is **`FindAllBuildCache`** + cached pattern/property
+reads; if the provider rejects the cache build, **`FindAll`** + **`GetCurrentPattern`**
+fallback runs (slower). **D3** parallelizes only when the cached descendant count
+is large and there are multiple distinct child HWNDs — see `04-build-order.md` D3.
 
-| Date       | App / HWND role   | Elements | Wall time (ms) | Notes                          |
-|------------|-------------------|----------|----------------|--------------------------------|
-| 2026-04-26 | Example (fill in) | —        | —              | Replace row when benching.   |
+Record your machine’s numbers when you change enumeration so regressions are visible:
 
-After **D1**, add a second column group here with `FindAllBuildCache` timings vs
-the old `FindAll` baseline from the same machine.
+| Date       | App / HWND role | Elements | Wall (ms) | Path (cache / FindAll fallback) | Notes |
+|------------|-----------------|----------|-----------|-----------------------------------|-------|
+| (fill in)  | —               | —        | —         | —                                 | Replace row when benching. |
+
+Keep a **historical** row or footnote for the old M3 `FindAll`-only baseline if you
+still have those numbers; compare P95 on the **same** app after each Phase D change.
 
 ## How we measure hotkey-to-pixels latency
 

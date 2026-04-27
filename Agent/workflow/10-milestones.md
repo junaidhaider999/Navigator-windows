@@ -157,8 +157,9 @@ screen positions. Esc dismisses.
 configuration.
 
 > 🟢 **MVP path landed in tree** (orchestration in `nav-app`; formal gates above
-> are still partially manual). Navigator is functionally a v0. **Next:** make it
-> fast (M6 / Phase D).
+> are still partially manual). Navigator is functionally a v0. **Next:** hit
+> Phase D exit metrics on the reference set (`12-benchmarking.md`), then Phase E
+> fallbacks and polish.
 
 ---
 
@@ -166,7 +167,14 @@ configuration.
 
 **Theme:** The single biggest perf win.
 
-**Scope:**
+**Repo status:** **Done** in code for the D1 shape in `04-build-order.md`:
+`CreateCacheRequest` at `UiaRuntime::new`, `FindAllBuildCache` for enumeration
+with `GetCachedPattern(Invoke)` where the cache applies; **`FindAll` fallback**
+when `FindAllBuildCache` fails (e.g. “pattern not found” on some providers);
+invoke uses **`GetCachedPattern` then `GetCurrentPattern`** when needed.
+Numeric P95 gates in the table below are still **to be proven** on the reference machine.
+
+**Scope (original intent — partially superseded by implementation notes above):**
 - Build `IUIAutomationCacheRequest` once at boot with all properties &
   patterns we read. Use `AutomationElementMode_None`.
 - Switch enumeration to `BuildUpdatedCache` + cached TreeWalker.
@@ -188,6 +196,12 @@ dramatically vs M3 baseline.
 ## M7 — Pre-warm (1 day)
 
 **Theme:** First hotkey is as fast as the thousandth.
+
+**Repo status:** **Done** for the overlay/GPU slice: `Renderer::prewarm()` after
+`spawn()` (`04-build-order.md` D2); render thread builds hidden HWND + DComp path
+and keeps devices between sessions. COM in the UIA worker thread is still
+initialized on first use (not moved to global boot) — see `nav-uia` if we extend
+prewarm there later.
 
 **Scope:**
 - COM init in workers at boot.
@@ -365,8 +379,8 @@ Engineers update this table as part of each PR.
 | M3  | UIA baseline               | **Done** | —                    | Uncached `FindAll` + invoke pattern; slow baseline (see `12-benchmarking.md`). |
 | M4  | First overlay              | **Done** | —                    | D2D + DComp primary-monitor overlay; session-filtered `Show`/`Hide`. |
 | M5  | End-to-end MVP             | **Done***| —                    | *Orchestration lives in `crates/nav-app/src/main.rs` (no separate `orchestrator` crate yet). Hint mode: `WH_KEYBOARD_LL` in `nav-input`. Formal 100× reliability / fault-injection gates still manual.* |
-| M6  | UIA cache                  | TODO     | —                    | Next perf milestone (Phase D / `04-build-order.md` D1). |
-| M7  | Pre-warm                   | TODO     | —                    | Overlay GPU init still on first `Show` in current code. |
+| M6  | UIA cache                  | **Done** | —                    | D1: `FindAllBuildCache` + cache request; `FindAll` fallback; invoke cache/current pattern (`04-build-order.md` D1). P95 gates still to bench. |
+| M7  | Pre-warm                   | **Done***| —                    | D2: `Renderer::prewarm()` + overlay thread; *formal cold-start script / P95 gate still manual.* |
 | M8  | Multi-monitor              | TODO     | —                    |       |
 | M9  | Fallbacks                  | TODO     | —                    |       |
 | M10 | Config + tray              | TODO     | —                    |       |

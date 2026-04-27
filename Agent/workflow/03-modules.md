@@ -23,7 +23,11 @@ cross-platform.
 // hint.rs
 #[derive(Clone, Debug, PartialEq)]
 pub struct RawHint {
-    pub element_id: u64,        // Stable id provided by enumerator (UIA runtime id hash, etc.)
+    pub element_id: u64, // UIA: index into FindAllBuildCache/FindAll(Descendants) for the invoke scope below.
+    /// UIA only: when `Some`, invoke uses `ElementFromHandle` on this HWND and `element_id` indexes that subtree.
+    pub uia_invoke_hwnd: Option<usize>,
+    /// UIA only: when `uia_invoke_hwnd` is `None`, optional root child index for subtree-scoped invoke (D3).
+    pub uia_child_index: Option<u32>,
     pub bounds: Rect,           // Screen-space, physical pixels.
     pub kind: ElementKind,      // What action this element supports.
     pub name: Option<Box<str>>, // Optional accessible name. Used only for ranking.

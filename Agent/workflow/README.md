@@ -24,10 +24,12 @@ your first pass, then use it as a reference.
 
 ## Implementation snapshot (sync with code)
 
-As of the **Phase C** deliverable in-tree: **M0–M5** are reflected as **Done**
-(or **Done*** where noted) on the [status board in `10-milestones.md`](10-milestones.md#status-board-live).
-Phase **D** (UIA cache, pre-warm, render diffs) is **not** started in code yet;
-use [`04-build-order.md`](04-build-order.md) for the strict build sequence.
+On the [status board in `10-milestones.md`](10-milestones.md#status-board-live):
+**M0–M5** are **Done** (or **Done*** where noted); **M6** (UIA cache / D1) and **M7**
+(overlay pre-warm / D2) are **Done** in code. Phase **D** items **D3** (parallel HWND
+subtrees) and **D4** (partial overlay repaint) are also in-tree — see
+[`04-build-order.md`](04-build-order.md) Phase D **Implemented** bullets. Phase D
+**exit** metrics (P95 on the reference set) and Phase **E** fallbacks are still open.
 
 ---
 

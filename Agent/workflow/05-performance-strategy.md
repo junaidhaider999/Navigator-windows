@@ -3,9 +3,14 @@
 > The product is latency. This document is where the milliseconds come from
 > and how we keep them.
 
-**Today:** uncached UIA enumeration still dominates end-to-end latency (often
-**100–400 ms+** on large trees). **M6 / Phase D** is where we claw that back
-with `IUIAutomationCacheRequest` and related work (`04-build-order.md`).
+**Today:** UIA **enumeration** still dominates latency on many real apps (**often
+100–500 ms+** on large or hostile provider trees), even with **D1** cache +
+**D3** parallelism (only when `FindAllBuildCache` succeeds and the tree is big
+enough). **Fallback** `FindAll` + per-element `GetCurrentPattern` is slower but
+required when `FindAllBuildCache` returns “pattern not found.” **D2** prewarm and
+**D4** partial redraw shrink cold overlay and filter-frame cost; they do not fix
+a 300 ms UIA walk by themselves. Remaining work is measurement, tuning, and
+Phase **E** fallbacks — see `04-build-order.md` / `12-benchmarking.md`.
 
 ## Where the time goes (legacy HAP, instrumented)
 
@@ -40,6 +45,9 @@ Both are fixable.
 It tells UIA: *"when you walk the tree for me, fetch all of these properties
 and patterns in one cross-process call. Hand me back a tree where every
 element is already cached."*
+
+**In-tree (D1):** `nav-uia` uses this for `FindAllBuildCache` when providers allow it;
+otherwise it falls back to `FindAll` + live pattern queries (slower but reliable).
 
 Pseudo-Rust:
 

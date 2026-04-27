@@ -178,7 +178,9 @@ shippable in *concept* at this point.
 - **Touches:** `nav-uia/runtime.rs`, `nav-uia/enumerate.rs`, `nav-uia/cache.rs`.
 - **Implemented:** `IUIAutomation::CreateCacheRequest` at `UiaRuntime::new`,
   `FindAllBuildCache` + `GetCachedPattern` for Invoke; `TreeScope_Element` on the
-  request per Microsoft’s `FindAllBuildCache` contract.
+  request per Microsoft’s `FindAllBuildCache` contract. If `FindAllBuildCache` fails
+  (e.g. provider “pattern not found”), **`FindAll` + `GetCurrentPattern`** fallback;
+  invoke tries **`GetCachedPattern` then `GetCurrentPattern`**.
 - **Done when:**
   - Reference window enumeration drops from B3's baseline to **≤ 25 ms P95**.
   - Bench `enumerate_real` shows the delta in the regression report.
@@ -208,8 +210,9 @@ shippable in *concept* at this point.
   root HWND) → Rayon enumerates each HWND subtree on a **per-thread STA** worker
   with its own `IUIAutomation` + cache; non-HWND children merge on the main
   thread via `FindAllBuildCache` from the child element; `RawHint` carries
-  `uia_invoke_hwnd` / `uia_child_index`; invoke uses `FindAllBuildCache` +
-  `GetCachedPattern(Invoke)` with the same cache request.
+  `uia_invoke_hwnd` / `uia_child_index`; invoke resolves with `FindAllBuildCache`
+  + **`GetCachedPattern(Invoke)`**, falling back to **`GetCurrentPattern(Invoke)`**
+  when the element has no cached pattern (matches `FindAll` enumeration fallback).
 - **Done when:**
   - For trees < 256 elements: keep the synchronous path (parallelism cost
     > benefit).

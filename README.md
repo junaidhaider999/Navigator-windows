@@ -7,10 +7,15 @@
 
 **Phase C (MVP path) is implemented:** `Alt+;` → UIA enumerate → `nav-core` plan
 → session → overlay pills → type labels → UIA invoke; Esc and second hotkey
-cancel cleanly. Enumeration uses a UIA cache (D1) but can still be slow on very
-large trees; Phase D continues with pre-warm (D2) and further optimization. See
+cancel cleanly. **Phase D (in tree):** D1 cached enumeration (`FindAllBuildCache`,
+with `FindAll` + `GetCurrentPattern` fallback when a provider rejects the cache),
+D2 overlay/GPU **prewarm** at boot, D3 parallel HWND subtrees for large cached
+trees, D4 **partial** overlay repaints when filter geometry is a small diff. P95
+**under 30 ms** hotkey-to-hint on the reference set is still the **target**, not
+the current measured bar on heavy apps. See
 [Agent/workflow/10-milestones.md](Agent/workflow/10-milestones.md) for the
-milestone table.
+milestone table and [Agent/workflow/04-build-order.md](Agent/workflow/04-build-order.md)
+for phase detail.
 
 ## Quick start (developers)
 
