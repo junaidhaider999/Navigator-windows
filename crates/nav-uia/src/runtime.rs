@@ -8,6 +8,7 @@ use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     CoUninitialize,
 };
+use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, CUIAutomation8, IUIAutomation, IUIAutomationCacheRequest, IUIAutomationCondition,
 };
@@ -25,6 +26,23 @@ use crate::fallback_msaa::{enumerate_msaa, invoke_msaa_at};
 use crate::hwnd::UiaHwnd;
 use crate::invoke::invoke_invoke_pattern;
 use crate::options::{EnumOptions, FallbackPolicy};
+
+fn qpc_delta_ms(freq: i64, t0: i64, t1: i64) -> f64 {
+    if freq <= 0 {
+        return 0.0;
+    }
+    (t1.saturating_sub(t0) as f64) * 1000.0 / freq as f64
+}
+
+fn budget_warn(stage: &str, took_ms: f64, budget_ms: u64) {
+    if budget_ms == 0 || took_ms <= budget_ms as f64 {
+        return;
+    }
+    eprintln!(
+        "[uia] budget: stage={} took_ms={:.2} (soft budget {} ms)",
+        stage, took_ms, budget_ms
+    );
+}
 
 struct CachedFindDescendantsCondition {
     include_disabled: bool,
@@ -140,35 +158,117 @@ impl UiaRuntime {
         hwnd: UiaHwnd,
         opts: &EnumOptions,
     ) -> Result<NavEnumerateResult, UiaError> {
+        let mut freq = 0i64;
+        unsafe {
+            let _ = QueryPerformanceFrequency(&mut freq);
+        }
+
         match opts.fallback {
-            FallbackPolicy::MsaaOnly => Ok(NavEnumerateResult {
-                hints: enumerate_msaa(hwnd, opts)?,
-                debug_rejects: Vec::new(),
-            }),
+            FallbackPolicy::MsaaOnly => {
+                let mut t0 = 0i64;
+                let mut t1 = 0i64;
+                unsafe {
+                    let _ = QueryPerformanceCounter(&mut t0);
+                }
+                let hints = enumerate_msaa(hwnd, opts)?;
+                unsafe {
+                    let _ = QueryPerformanceCounter(&mut t1);
+                }
+                budget_warn("msaa", qpc_delta_ms(freq, t0, t1), opts.budget_msaa_ms);
+                Ok(NavEnumerateResult {
+                    hints,
+                    debug_rejects: Vec::new(),
+                })
+            }
             FallbackPolicy::UiaOnly => {
                 let find_cond = self.find_descendants_condition(opts)?;
-                enumerate_baseline(&self.automation, hwnd, opts, &self.enum_cache, &find_cond)
+                let mut t0 = 0i64;
+                let mut t1 = 0i64;
+                unsafe {
+                    let _ = QueryPerformanceCounter(&mut t0);
+                }
+                let res =
+                    enumerate_baseline(&self.automation, hwnd, opts, &self.enum_cache, &find_cond);
+                unsafe {
+                    let _ = QueryPerformanceCounter(&mut t1);
+                }
+                budget_warn("uia", qpc_delta_ms(freq, t0, t1), opts.budget_uia_ms);
+                res
             }
             FallbackPolicy::Auto => {
                 let find_cond = self.find_descendants_condition(opts)?;
+
+                let mut t_uia_0 = 0i64;
+                let mut t_uia_1 = 0i64;
+                unsafe {
+                    let _ = QueryPerformanceCounter(&mut t_uia_0);
+                }
                 let r =
                     enumerate_baseline(&self.automation, hwnd, opts, &self.enum_cache, &find_cond)?;
+                unsafe {
+                    let _ = QueryPerformanceCounter(&mut t_uia_1);
+                }
+                budget_warn(
+                    "uia",
+                    qpc_delta_ms(freq, t_uia_0, t_uia_1),
+                    opts.budget_uia_ms,
+                );
+
                 if !r.hints.is_empty() {
                     return Ok(r);
                 }
+
+                let mut t_msaa_0 = 0i64;
+                let mut t_msaa_1 = 0i64;
+                unsafe {
+                    let _ = QueryPerformanceCounter(&mut t_msaa_0);
+                }
                 let msaa = enumerate_msaa(hwnd, opts)?;
+                unsafe {
+                    let _ = QueryPerformanceCounter(&mut t_msaa_1);
+                }
+                budget_warn(
+                    "msaa",
+                    qpc_delta_ms(freq, t_msaa_0, t_msaa_1),
+                    opts.budget_msaa_ms,
+                );
                 if !msaa.is_empty() {
                     return Ok(NavEnumerateResult {
                         hints: msaa,
                         debug_rejects: r.debug_rejects,
                     });
                 }
+
+                let mut t_hw_0 = 0i64;
+                let mut t_hw_1 = 0i64;
+                unsafe {
+                    let _ = QueryPerformanceCounter(&mut t_hw_0);
+                }
+                let hwnd_hints = enumerate_raw_hwnd(hwnd, opts)?;
+                unsafe {
+                    let _ = QueryPerformanceCounter(&mut t_hw_1);
+                }
+                budget_warn(
+                    "hwnd",
+                    qpc_delta_ms(freq, t_hw_0, t_hw_1),
+                    opts.budget_hwnd_ms,
+                );
                 Ok(NavEnumerateResult {
-                    hints: enumerate_raw_hwnd(hwnd, opts)?,
+                    hints: hwnd_hints,
                     debug_rejects: r.debug_rejects,
                 })
             }
         }
+    }
+
+    /// Dump a bounded UIA subtree for troubleshooting (tray **Diagnose**).
+    pub fn diagnose_uia_snapshot(
+        &self,
+        hwnd: UiaHwnd,
+        max_depth: usize,
+        max_nodes: usize,
+    ) -> Result<String, UiaError> {
+        crate::diagnose::snapshot_uia_tree(&self.automation, hwnd, max_depth, max_nodes)
     }
 
     /// Pattern dispatch: `Invoke` on the element located at the same `FindAll` index as enumeration.

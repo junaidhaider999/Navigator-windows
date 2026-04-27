@@ -16,6 +16,10 @@ pub struct EnumOptions {
     pub include_offscreen: bool,
     pub include_disabled: bool,
     pub fallback: FallbackPolicy,
+    /// Soft time budgets per enumerator stage (ms). When exceeded, a `tracing::warn` is emitted.
+    pub budget_uia_ms: u64,
+    pub budget_msaa_ms: u64,
+    pub budget_hwnd_ms: u64,
     /// When true, log each skipped UIA node during enumeration to stderr (`[uia-debug]`).
     pub debug_uia: bool,
     /// When true, record skipped nodes with bounds (when known) for a visual debug overlay.
@@ -29,6 +33,9 @@ impl Default for EnumOptions {
             include_offscreen: false,
             include_disabled: false,
             fallback: FallbackPolicy::Auto,
+            budget_uia_ms: 25,
+            budget_msaa_ms: 8,
+            budget_hwnd_ms: 5,
             debug_uia: false,
             debug_overlay: false,
         }

@@ -18,6 +18,8 @@ mod click;
 #[cfg(windows)]
 mod coords;
 #[cfg(windows)]
+mod diagnose;
+#[cfg(windows)]
 mod enumerate;
 #[cfg(windows)]
 mod fallback_hwnd;

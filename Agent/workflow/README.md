@@ -37,10 +37,10 @@ dispatch are **in tree** (`nav-uia::fallback_*`, `FallbackPolicy::Auto`). Per-st
 time budgets, tray diagnostics, and coverage matrix gates are **not** done. **E3–E5**
 (multi-monitor/DPI polish, tray + reload, release artifacts) are still open.
 
-**Configuration** — `crates/nav-config` exists with an **`[hints]`** subset
-(alphabet, `max_elements`), **`--config`**, and **`--print-config`** in `navigator`.
-Discovery (`%APPDATA%`, exe-dir), hot reload, and the full schema in
-[`13-configuration.md`](13-configuration.md) are **future / M10**.
+**Configuration** — `nav-config`: `[hints]`, `[log]`, `[fallback.budget_ms]`;
+`load_for_startup` discovery; **`--reset-config`**; tray **Reload** reapplies
+hints and budgets. Full schema, appearance hot reload, and file watcher remain
+in [`13-configuration.md`](13-configuration.md) (partial M10).
 
 ---
 

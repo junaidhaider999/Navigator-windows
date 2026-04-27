@@ -4,17 +4,13 @@
 > decision the user must make and a code path we must keep working.
 > **Bias hard toward sensible defaults.**
 
-**Repo state:** `crates/nav-config` exists and **`navigator`** loads it at startup.
-
-- **`nav_config::load(Optional<Path>)`** — if no path, returns built-in defaults.
-- **Implemented TOML subset:** `[hints]` only — `alphabet` (string) and
-  `max_elements` (usize). Defaults: alphabet `"sadfjklewcmpgh"`, **`max_elements`
-  2048** (aligned with `EnumOptions` default in `nav-uia`).
-- **CLI (today):** `--config <path>`, `--print-config` (prints `Debug` of merged
-  `Config`, then exits).
-- **Not implemented yet:** discovery order (`NAVIGATOR_CONFIG`, `%APPDATA%`,
-  exe-dir), hot reload, `--reset-config`, and every other section below — those
-  remain the **target** design for the rest of **M10**.
+**Repo state:** `crates/nav-config` + **`navigator`** use **`load_for_startup`**
+(see discovery order below). Implemented sections: **`[hints]`**, **`[log]`**
+(optional `level`, merged with `--log` at startup), **`[fallback.budget_ms]`**
+(`uia` / `msaa` / `hwnd`, defaults **25 / 8 / 5**). CLI: **`--config`**, **`--print-config`**,
+**`--reset-config`**, **`--no-tray`**. Tray **Reload** re-reads config (hints +
+budgets). **Not** yet: full schema below, automatic discovery writes,
+`--edit-config`, **`[appearance]`** reload into DWrite, or hotkey chord from file.
 
 ## Principles
 

@@ -547,6 +547,7 @@ name = "nav-app"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "crossbeam-channel",
  "nav-config",
  "nav-core",
  "nav-input",

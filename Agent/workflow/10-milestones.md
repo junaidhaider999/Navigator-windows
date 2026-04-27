@@ -250,10 +250,11 @@ hotkey works on each, hints appear at correct sizes.
 
 **Repo status:** **Partial.** **E1/E2** are implemented: `nav-uia::fallback_msaa`
 and `nav-uia::fallback_hwnd`, `FallbackPolicy` (`Auto` / `UiaOnly` / `MsaaOnly`),
-enumerate ladder when UIA yields no rows, and **invoke** routed by hint `Backend`
-(UIA vs MSAA `accDoDefaultAction` vs raw HWND center click). **Not** in tree yet:
-per-step time budgets (25 / 8 / 5 ms), tray “Diagnose” UIA dump, and the
-1000-trigger / matrix gates below as automated checks.
+enumerate ladder when UIA yields no rows, and **invoke** routed by hint `Backend`.
+Soft **per-stage time budgets** (default 25 / 8 / 5 ms) are wired in
+`EnumOptions` and logged to stderr when a stage exceeds its budget. **Diagnose**
+is available from the tray (shallow UIA tree dump to `%TEMP%\\navigator-uia-dump.txt`).
+**Not** automated: 1000-trigger reliability and coverage matrix CI.
 
 **Scope:**
 - `nav-uia::fallback_msaa` — `IAccessible` enumerator.
@@ -277,11 +278,14 @@ builds; MSAA covers it). An older MFC test fixture also gets hints.
 
 **Theme:** Users can change the things they care about.
 
-**Repo status:** **Partial (foundation).** Crate `nav-config` loads TOML with a
-minimal **`[hints]`** section (`alphabet`, `max_elements`; built-in defaults match
-legacy: alphabet `"sadfjklewcmpgh"`, **2048** max elements). `navigator` supports
-`--config <path>` and `--print-config`. Full schema, discovery order, `--reset-config`,
-and tray UI are still **TODO** (see `13-configuration.md`).
+**Repo status:** **Partial.** `nav-config` supports **`[hints]`**, **`[log]`** (optional
+`level`), **`[fallback.budget_ms]`**; **`load_for_startup`** / discovery
+(`--config` → `NAVIGATOR_CONFIG` → `%APPDATA%\\Navigator\\config.toml` →
+`<exe>\\config.toml`). CLI: **`--config`**, **`--print-config`**, **`--reset-config`**,
+**`--no-tray`**. **Tray:** Reload, Open config folder, Diagnose, About, Quit.
+Hot reload applies hints + budgets (not full appearance/hotkey re-register from
+file yet). Full schema, file watcher, and **`[appearance]`** hot reload remain
+**TODO** (see `13-configuration.md`).
 
 **Scope:**
 - `nav-config` full schema: hotkey, alphabet, font size, colors,
@@ -397,8 +401,8 @@ Engineers update this table as part of each PR.
 | M6  | UIA cache                  | **Done** | —                    | D1: `FindAllBuildCache` + cache request; `FindAll` fallback; invoke cache/current pattern (`04-build-order.md` D1). P95 gates still to bench. |
 | M7  | Pre-warm                   | **Done***| —                    | D2: `Renderer::prewarm()` + overlay thread; *formal cold-start script / P95 gate still manual.* |
 | M8  | Multi-monitor              | TODO     | —                    |       |
-| M9  | Fallbacks                  | **Partial** | —                 | MSAA + HWND fallback enumerate + invoke in `nav-uia`; time budgets + tray diagnose + automated matrix gates not done. |
-| M10 | Config + tray              | **Partial** | —                 | `nav-config` + `[hints]` + `--config` / `--print-config`; tray, reload, full schema deferred. |
+| M9  | Fallbacks                  | **Partial** | —                 | MSAA + HWND + soft stage budgets + diagnose dump; automated matrix / reliability gates not in CI. |
+| M10 | Config + tray              | **Partial** | —                 | Discovery, `[log]` + budgets, tray + reload + reset; full schema + appearance reload deferred. |
 | M11 | Release                    | TODO     | —                    |       |
 | M12 | Glyph atlas (post-v1)      | TODO     | —                    |       |
 | M13 | Progressive reveal         | TODO     | —                    |       |
