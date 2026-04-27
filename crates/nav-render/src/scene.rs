@@ -147,6 +147,25 @@ fn rects_overlap(a: &D2D_RECT_F, b: &D2D_RECT_F) -> bool {
     a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
 }
 
+fn rect_intersection_area(a: &D2D_RECT_F, b: &D2D_RECT_F) -> f32 {
+    let left = a.left.max(b.left);
+    let top = a.top.max(b.top);
+    let right = a.right.min(b.right);
+    let bottom = a.bottom.min(b.bottom);
+    if left < right && top < bottom {
+        (right - left) * (bottom - top)
+    } else {
+        0.0
+    }
+}
+
+fn overlap_penalty_with_placed(r: &D2D_RECT_F, placed: &[PillGeom]) -> f32 {
+    placed
+        .iter()
+        .map(|p| rect_intersection_area(r, &p.rect))
+        .sum()
+}
+
 fn clamp_pill_to_client(mut r: D2D_RECT_F, client_w: f32, client_h: f32) -> Option<D2D_RECT_F> {
     const MIN_SPAN: f32 = 4.0;
     r.left = r.left.max(0.0);
@@ -160,7 +179,7 @@ fn clamp_pill_to_client(mut r: D2D_RECT_F, client_w: f32, client_h: f32) -> Opti
     }
 }
 
-/// TL → TR → BL → BR for each micro-offset ring (§07-style de-collision).
+/// Radial / axis offsets around center + corners; denser rings near the element, wider search when crowded.
 fn pill_rect_candidates(
     el_left: f32,
     el_top: f32,
@@ -180,10 +199,13 @@ fn pill_rect_candidates(
         (el_left - o, el_top + el_h - ph + o),
         (el_left + el_w - pw + o, el_top + el_h - ph + o),
     ];
-    let mut offs = Vec::with_capacity(40);
+    // More rings + slightly tighter step so dense UIA lists still find a nearby free slot.
+    const RINGS: i32 = 16;
+    const STEP: f32 = 4.0;
+    let mut offs = Vec::with_capacity((RINGS as usize).saturating_mul(8).saturating_add(1));
     offs.push((0.0f32, 0.0f32));
-    for k in 1_i32..=8 {
-        let s = k as f32 * 5.0;
+    for k in 1_i32..=RINGS {
+        let s = k as f32 * STEP;
         offs.push((s, 0.0));
         offs.push((-s, 0.0));
         offs.push((0.0, s));
@@ -218,12 +240,23 @@ fn choose_pill_rect(
     client_w: f32,
     client_h: f32,
 ) -> Option<D2D_RECT_F> {
-    for cand in pill_rect_candidates(el_left, el_top, el_w, el_h, pw, ph) {
+    let cands = pill_rect_candidates(el_left, el_top, el_w, el_h, pw, ph);
+    let mut best_overlap: Option<(f32, D2D_RECT_F)> = None;
+    for cand in cands {
         if let Some(r) = clamp_pill_to_client(cand, client_w, client_h) {
             if placed.iter().all(|p| !rects_overlap(&r, &p.rect)) {
                 return Some(r);
             }
+            let pen = overlap_penalty_with_placed(&r, placed);
+            best_overlap = match best_overlap {
+                None => Some((pen, r)),
+                Some((best_p, _)) if pen < best_p => Some((pen, r)),
+                Some(prev) => Some(prev),
+            };
         }
+    }
+    if let Some((_, r)) = best_overlap {
+        return Some(r);
     }
     let o = PILL_OUTSET;
     let l = el_left - o;
@@ -288,8 +321,17 @@ pub fn pills_for_frame(
     }
     let (ox, oy) = overlay_origin_phys;
     let scale = 96.0 / dpi;
+    let mut order: Vec<usize> = (0..hints.len()).collect();
+    order.sort_by(|&a, &b| {
+        hints[b]
+            .score
+            .partial_cmp(&hints[a].score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.cmp(&b))
+    });
     let mut placed = Vec::with_capacity(hints.len());
-    for h in hints {
+    for i in order {
+        let h = &hints[i];
         let el_left = (h.raw.bounds.x - ox) as f32 * scale;
         let el_top = (h.raw.bounds.y - oy) as f32 * scale;
         let el_w = h.raw.bounds.w as f32 * scale;
@@ -418,6 +460,18 @@ mod tests {
     use nav_core::{Backend, ElementKind, RawHint, Rect};
 
     fn hint_at(label: &str, element_id: u64, x: i32, y: i32, w: i32, h: i32) -> Hint {
+        hint_scored(label, element_id, 0.0, x, y, w, h)
+    }
+
+    fn hint_scored(
+        label: &str,
+        element_id: u64,
+        score: f32,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    ) -> Hint {
         Hint {
             raw: RawHint {
                 element_id,
@@ -430,7 +484,7 @@ mod tests {
                 backend: Backend::Uia,
             },
             label: label.into(),
-            score: 0.0,
+            score,
         }
     }
 
@@ -537,6 +591,33 @@ mod tests {
             !any_pairwise_overlap(&pills),
             "expected de-collision, got {:?}",
             pills
+        );
+    }
+
+    #[test]
+    fn higher_score_places_first_closer_to_element_center() {
+        let x = 100;
+        let y = 100;
+        let w = 80;
+        let h = 80;
+        let low_first = vec![
+            hint_scored("low", 1, 0.1, x, y, w, h),
+            hint_scored("high", 2, 10.0, x, y, w, h),
+        ];
+        let pills = pills_for_frame(&low_first, (0, 0), 800.0, 600.0, 96.0);
+        assert_eq!(pills.len(), 2);
+        let cx = (x + w / 2) as f32;
+        let cy = (y + h / 2) as f32;
+        let dist = |p: &PillGeom| {
+            let px = (p.rect.left + p.rect.right) * 0.5;
+            let py = (p.rect.top + p.rect.bottom) * 0.5;
+            ((px - cx).powi(2) + (py - cy).powi(2)).sqrt()
+        };
+        let d_high = pills.iter().find(|p| p.label == "high").map(dist).unwrap();
+        let d_low = pills.iter().find(|p| p.label == "low").map(dist).unwrap();
+        assert!(
+            d_high <= d_low + 2.0,
+            "expected higher-scored hint nearer center: high={d_high} low={d_low} pills={pills:?}"
         );
     }
 
