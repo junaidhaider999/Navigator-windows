@@ -11,7 +11,7 @@ use windows::Win32::UI::Accessibility::{
 };
 
 use crate::UiaError;
-use crate::cache::{create_enumeration_cache_request, create_invoke_build_cache_request};
+use crate::cache::{create_enumeration_cache_request, create_invoke_findall_cache_request};
 use crate::enumerate::enumerate_baseline;
 use crate::hwnd::UiaHwnd;
 use crate::invoke::invoke_invoke_pattern;
@@ -21,7 +21,8 @@ use crate::options::{EnumOptions, FallbackPolicy};
 pub struct UiaRuntime {
     automation: IUIAutomation,
     enum_cache: IUIAutomationCacheRequest,
-    invoke_live_cache: IUIAutomationCacheRequest,
+    /// `FindAllBuildCache` for invoke only (`AutomationElementMode_Full`); see `invoke.rs`.
+    invoke_find_cache: IUIAutomationCacheRequest,
     /// Call [`CoUninitialize`](CoUninitialize) only if this instance successfully called `CoInitializeEx` first on this thread.
     co_uninit_on_drop: bool,
 }
@@ -67,7 +68,7 @@ impl UiaRuntime {
             }
         };
 
-        let invoke_live_cache = match create_invoke_build_cache_request(&automation) {
+        let invoke_find_cache = match create_invoke_findall_cache_request(&automation) {
             Ok(c) => c,
             Err(e) => {
                 if co_uninit_on_drop {
@@ -80,7 +81,7 @@ impl UiaRuntime {
         Ok(Self {
             automation,
             enum_cache,
-            invoke_live_cache,
+            invoke_find_cache,
             co_uninit_on_drop,
         })
     }
@@ -97,13 +98,7 @@ impl UiaRuntime {
 
     /// Pattern dispatch: `Invoke` on the element located at the same `FindAll` index as enumeration.
     pub fn invoke(&self, hwnd: UiaHwnd, hint: &Hint) -> Result<(), UiaError> {
-        invoke_invoke_pattern(
-            &self.automation,
-            hwnd,
-            hint,
-            &self.enum_cache,
-            &self.invoke_live_cache,
-        )
+        invoke_invoke_pattern(&self.automation, hwnd, hint, &self.invoke_find_cache)
     }
 }
 

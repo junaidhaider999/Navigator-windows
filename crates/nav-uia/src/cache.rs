@@ -1,4 +1,4 @@
-//! [`IUIAutomationCacheRequest`] builders: enumeration (D1) and invoke-time “live” element refresh.
+//! [`IUIAutomationCacheRequest`] builders: fast enumeration vs invoke-time `FindAllBuildCache`.
 
 use windows::Win32::UI::Accessibility::{
     AutomationElementMode_Full, AutomationElementMode_None, IUIAutomation,
@@ -8,15 +8,13 @@ use windows::Win32::UI::Accessibility::{
 
 use crate::UiaError;
 
-/// Cache request for [`IUIAutomationElement::FindAllBuildCache`].
+/// Cache request for [`IUIAutomationElement::FindAllBuildCache`] during **enumeration**.
 ///
 /// Microsoft requires [`TreeScope_Element`](windows::Win32::UI::Accessibility::TreeScope_Element)
 /// on the request when used with `FindAllBuildCache` (not `TreeScope_Descendants`).
 ///
-/// `AutomationElementMode_None` halves the per-element bridge cost: UIA returns lightweight
-/// proxy elements that *only* expose the cached properties/patterns we asked for. Invoke must not
-/// call `GetCurrentPattern` on those proxies; see `create_invoke_build_cache_request` and
-/// `invoke::invoke_invoke_pattern`.
+/// `AutomationElementMode_None` reduces per-element cost. Elements from that snapshot are not
+/// usable for `Invoke` — invoke re-runs `FindAllBuildCache` with [`create_invoke_findall_cache_request`].
 pub fn create_enumeration_cache_request(
     automation: &IUIAutomation,
 ) -> Result<IUIAutomationCacheRequest, UiaError> {
@@ -44,23 +42,38 @@ pub fn create_enumeration_cache_request(
     }
 }
 
-/// Cache request for [`IUIAutomationElement::BuildUpdatedCache`] on invoke: **full** element so
-/// `GetCurrentPattern(UIA_InvokePatternId)` is legal after enumeration used `AutomationElementMode_None`.
-pub fn create_invoke_build_cache_request(
+/// Same properties/patterns as enumeration, but **`AutomationElementMode_Full`** so
+/// `IUIAutomationElementArray::GetElement` returns a real element (`GetCachedPattern` /
+/// `GetCurrentPattern` / `Invoke` work).
+pub fn create_invoke_findall_cache_request(
     automation: &IUIAutomation,
 ) -> Result<IUIAutomationCacheRequest, UiaError> {
     unsafe {
         let req = automation
             .CreateCacheRequest()
-            .map_err(|e| UiaError::Operation(format!("CreateCacheRequest (invoke live): {e}")))?;
+            .map_err(|e| UiaError::Operation(format!("CreateCacheRequest (invoke find): {e}")))?;
         req.SetTreeScope(TreeScope_Element)
-            .map_err(|e| UiaError::Operation(format!("invoke live cache SetTreeScope: {e}")))?;
+            .map_err(|e| UiaError::Operation(format!("invoke find cache SetTreeScope: {e}")))?;
         req.SetAutomationElementMode(AutomationElementMode_Full)
             .map_err(|e| {
-                UiaError::Operation(format!("invoke live cache SetAutomationElementMode: {e}"))
+                UiaError::Operation(format!("invoke find cache SetAutomationElementMode: {e}"))
             })?;
+        req.AddProperty(UIA_BoundingRectanglePropertyId)
+            .map_err(|e| {
+                UiaError::Operation(format!(
+                    "invoke find cache AddProperty BoundingRectangle: {e}"
+                ))
+            })?;
+        req.AddProperty(UIA_IsEnabledPropertyId).map_err(|e| {
+            UiaError::Operation(format!("invoke find cache AddProperty IsEnabled: {e}"))
+        })?;
+        req.AddProperty(UIA_IsOffscreenPropertyId).map_err(|e| {
+            UiaError::Operation(format!("invoke find cache AddProperty IsOffscreen: {e}"))
+        })?;
+        req.AddProperty(UIA_NamePropertyId)
+            .map_err(|e| UiaError::Operation(format!("invoke find cache AddProperty Name: {e}")))?;
         req.AddPattern(UIA_InvokePatternId).map_err(|e| {
-            UiaError::Operation(format!("invoke live cache AddPattern Invoke: {e}"))
+            UiaError::Operation(format!("invoke find cache AddPattern Invoke: {e}"))
         })?;
         Ok(req)
     }

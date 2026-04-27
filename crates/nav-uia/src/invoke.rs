@@ -1,8 +1,8 @@
-//! Invoke pattern dispatch: re-resolve the same `FindAllBuildCache` slice as enumeration (D1 cache).
+//! Invoke pattern dispatch: re-resolve the same `FindAllBuildCache` index as enumeration (D1).
 //!
-//! Enumeration uses `AutomationElementMode_None`; `GetElement` results may not support
-//! `GetCurrentPattern`. If `GetCachedPattern(UIA_InvokePatternId)` fails, we call
-//! `BuildUpdatedCache` with a tiny **full-mode** cache request so `GetCurrentPattern` is valid.
+//! Enumeration uses `AutomationElementMode_None` for speed. Invoke repeats `FindAllBuildCache`
+//! with a **Full**-mode cache (`create_invoke_findall_cache_request`) so `GetElement` yields a
+//! real element for `GetCachedPattern` / `GetCurrentPattern` / `Invoke`.
 
 use core::ffi::c_void;
 
@@ -23,8 +23,7 @@ pub fn invoke_invoke_pattern(
     automation: &IUIAutomation,
     hwnd: UiaHwnd,
     hint: &Hint,
-    enum_cache: &IUIAutomationCacheRequest,
-    invoke_live_cache: &IUIAutomationCacheRequest,
+    find_cache: &IUIAutomationCacheRequest,
 ) -> Result<(), UiaError> {
     if hwnd.is_invalid() {
         return Err(UiaError::Operation("invalid HWND for invoke".into()));
@@ -43,7 +42,7 @@ pub fn invoke_invoke_pattern(
         let base = HWND(mem as *mut c_void);
         let root = unsafe { automation.ElementFromHandle(base) }
             .map_err(|e| UiaError::Operation(e.to_string()))?;
-        let all = unsafe { root.FindAllBuildCache(TreeScope_Descendants, &true_cond, enum_cache) }
+        let all = unsafe { root.FindAllBuildCache(TreeScope_Descendants, &true_cond, find_cache) }
             .map_err(|e| UiaError::Operation(format!("FindAllBuildCache (scoped hwnd): {e}")))?;
         let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
         bounds_check(idx, len)?;
@@ -51,7 +50,7 @@ pub fn invoke_invoke_pattern(
     } else if let Some(ci) = hint.raw.uia_child_index {
         let root = unsafe { automation.ElementFromHandle(hwnd) }
             .map_err(|e| UiaError::Operation(e.to_string()))?;
-        let kids = unsafe { root.FindAllBuildCache(TreeScope_Children, &true_cond, enum_cache) }
+        let kids = unsafe { root.FindAllBuildCache(TreeScope_Children, &true_cond, find_cache) }
             .map_err(|e| UiaError::Operation(format!("FindAllBuildCache Children: {e}")))?;
         let c = unsafe { kids.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
         if ci as i32 >= c {
@@ -62,7 +61,7 @@ pub fn invoke_invoke_pattern(
         let subroot = unsafe { kids.GetElement(ci as i32) }
             .map_err(|e| UiaError::Operation(e.to_string()))?;
         let all =
-            unsafe { subroot.FindAllBuildCache(TreeScope_Descendants, &true_cond, enum_cache) }
+            unsafe { subroot.FindAllBuildCache(TreeScope_Descendants, &true_cond, find_cache) }
                 .map_err(|e| UiaError::Operation(format!("FindAllBuildCache subtree: {e}")))?;
         let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
         bounds_check(idx, len)?;
@@ -70,7 +69,7 @@ pub fn invoke_invoke_pattern(
     } else {
         let root = unsafe { automation.ElementFromHandle(hwnd) }
             .map_err(|e| UiaError::Operation(e.to_string()))?;
-        let all = unsafe { root.FindAllBuildCache(TreeScope_Descendants, &true_cond, enum_cache) }
+        let all = unsafe { root.FindAllBuildCache(TreeScope_Descendants, &true_cond, find_cache) }
             .map_err(|e| UiaError::Operation(format!("FindAllBuildCache: {e}")))?;
         let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
         bounds_check(idx, len)?;
@@ -79,18 +78,11 @@ pub fn invoke_invoke_pattern(
 
     let pat = match unsafe { el.GetCachedPattern(UIA_InvokePatternId) } {
         Ok(p) => p,
-        Err(e_cache) => {
-            let live = unsafe { el.BuildUpdatedCache(invoke_live_cache) }.map_err(|e_buc| {
-                UiaError::Operation(format!(
-                    "Invoke: GetCachedPattern: {e_cache}; BuildUpdatedCache: {e_buc}"
-                ))
-            })?;
-            unsafe { live.GetCurrentPattern(UIA_InvokePatternId) }.map_err(|e_cur| {
-                UiaError::Operation(format!(
-                    "Invoke: GetCachedPattern: {e_cache}; GetCurrentPattern after BuildUpdatedCache: {e_cur}"
-                ))
-            })?
-        }
+        Err(e1) => unsafe { el.GetCurrentPattern(UIA_InvokePatternId) }.map_err(|e2| {
+            UiaError::Operation(format!(
+                "Invoke pattern GetCachedPattern: {e1}; GetCurrentPattern: {e2}"
+            ))
+        })?,
     };
     let invoke: IUIAutomationInvokePattern =
         pat.cast().map_err(|e| UiaError::Operation(e.to_string()))?;
