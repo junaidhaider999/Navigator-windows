@@ -27,6 +27,8 @@
 
 Run the app with **`--debug-uia`** to print skip reasons while enumerating (`[uia-debug]` on stderr).
 
+Run with **`--debug-overlay`** (in addition or alone) to draw **translucent orange rectangles** for nodes that matched the UIA `FindAll` filter but were dropped in Rust (same skip reasons as stderr logging, when bounds are known). If the planner yields no pills but rejects have geometry, the overlay still appears; press **Escape** to dismiss.
+
 ## Metrics / next steps
 
 - For each target app, compare hint counts and obvious misses vs HAP after these changes.

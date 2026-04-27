@@ -2,7 +2,7 @@
 
 use std::sync::Mutex;
 
-use nav_core::{Hint, RawHint};
+use nav_core::{Hint, NavEnumerateResult};
 use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -126,8 +126,12 @@ impl UiaRuntime {
         Ok(condition)
     }
 
-    /// Enumerate invoke targets for the window captured at hotkey time (D1 cache).
-    pub fn enumerate(&self, hwnd: UiaHwnd, opts: &EnumOptions) -> Result<Vec<RawHint>, UiaError> {
+    /// Enumerate actionable UI for the window captured at hotkey time (D1 cache).
+    ///
+    /// When [`EnumOptions::debug_overlay`](crate::options::EnumOptions::debug_overlay) is set,
+    /// `debug_rejects` lists nodes that matched the provider filter but were dropped in Rust
+    /// (for visualization).
+    pub fn enumerate(&self, hwnd: UiaHwnd, opts: &EnumOptions) -> Result<NavEnumerateResult, UiaError> {
         if opts.fallback == FallbackPolicy::MsaaOnly {
             return Err(UiaError::UnsupportedConfiguration(
                 "MsaaOnly is not implemented in the B3 baseline",

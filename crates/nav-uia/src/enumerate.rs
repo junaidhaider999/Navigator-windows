@@ -2,9 +2,9 @@
 
 use core::ffi::c_void;
 use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use nav_core::{Backend, RawHint, Rect};
+use nav_core::{Backend, NavEnumerateResult, RawHint, Rect, UiaDebugReject};
 use rayon::prelude::*;
 use windows::Win32::Foundation::{HWND, RECT, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{
@@ -68,9 +68,13 @@ pub fn enumerate_baseline(
     opts: &EnumOptions,
     cache: &IUIAutomationCacheRequest,
     find_descendants_cond: &IUIAutomationCondition,
-) -> Result<Vec<RawHint>, UiaError> {
+) -> Result<NavEnumerateResult, UiaError> {
+    let reject_sink = opts
+        .debug_overlay
+        .then(|| Arc::new(Mutex::new(Vec::<UiaDebugReject>::new())));
+
     if hwnd.is_invalid() {
-        return Ok(Vec::new());
+        return Ok(NavEnumerateResult::default());
     }
 
     let root = unsafe { automation.ElementFromHandle(hwnd) }
@@ -85,17 +89,53 @@ pub fn enumerate_baseline(
     let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
 
     if !root_cached {
-        return collect_from_descendants_array(&all, opts, hwnd, None, None, false);
+        let hints = collect_from_descendants_array(
+            &all,
+            opts,
+            hwnd,
+            None,
+            None,
+            false,
+            &reject_sink,
+        )?;
+        return Ok(NavEnumerateResult {
+            hints,
+            debug_rejects: take_rejects(&reject_sink),
+        });
     }
 
     if len < PARALLEL_DESCENDANT_MIN {
-        return collect_from_descendants_array(&all, opts, hwnd, None, None, true);
+        let hints = collect_from_descendants_array(
+            &all,
+            opts,
+            hwnd,
+            None,
+            None,
+            true,
+            &reject_sink,
+        )?;
+        return Ok(NavEnumerateResult {
+            hints,
+            debug_rejects: take_rejects(&reject_sink),
+        });
     }
 
     let kids = match unsafe { root.FindAllBuildCache(TreeScope_Children, &true_cond, cache) } {
         Ok(k) => k,
         Err(e) if is_pattern_cache_build_failure(&e) => {
-            return collect_from_descendants_array(&all, opts, hwnd, None, None, true);
+            let hints = collect_from_descendants_array(
+                &all,
+                opts,
+                hwnd,
+                None,
+                None,
+                true,
+                &reject_sink,
+            )?;
+            return Ok(NavEnumerateResult {
+                hints,
+                debug_rejects: take_rejects(&reject_sink),
+            });
         }
         Err(e) => {
             return Err(UiaError::Operation(format!(
@@ -106,7 +146,19 @@ pub fn enumerate_baseline(
     let n_children = unsafe { kids.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
 
     if n_children <= 1 {
-        return collect_from_descendants_array(&all, opts, hwnd, None, None, true);
+        let hints = collect_from_descendants_array(
+            &all,
+            opts,
+            hwnd,
+            None,
+            None,
+            true,
+            &reject_sink,
+        )?;
+        return Ok(NavEnumerateResult {
+            hints,
+            debug_rejects: take_rejects(&reject_sink),
+        });
     }
 
     let mut hwnd_subtrees: Vec<HWND> = Vec::new();
@@ -130,10 +182,23 @@ pub fn enumerate_baseline(
     hwnd_subtrees.retain(|h| *h != hwnd);
 
     if hwnd_subtrees.len() < MIN_PARALLEL_HWND_SUBTREES {
-        return collect_from_descendants_array(&all, opts, hwnd, None, None, true);
+        let hints = collect_from_descendants_array(
+            &all,
+            opts,
+            hwnd,
+            None,
+            None,
+            true,
+            &reject_sink,
+        )?;
+        return Ok(NavEnumerateResult {
+            hints,
+            debug_rejects: take_rejects(&reject_sink),
+        });
     }
 
     let opts_arc = Arc::new(opts.clone());
+    let reject_arc = reject_sink.clone();
     let session_root_bits = hwnd.0 as usize;
     // `HWND` is not `Send` in windows-rs; pass pointer bits for Rayon.
     let hwnd_bits: Vec<usize> = hwnd_subtrees.iter().map(|h| h.0 as usize).collect();
@@ -142,13 +207,32 @@ pub fn enumerate_baseline(
         .map(|&bits| {
             let sub = HWND(bits as *mut c_void);
             let session_root = HWND(session_root_bits as *mut c_void);
-            enumerate_hwnd_subtree_parallel(sub, opts_arc.as_ref(), session_root)
+            enumerate_hwnd_subtree_parallel(
+                sub,
+                opts_arc.as_ref(),
+                session_root,
+                &reject_arc,
+            )
         })
         .collect();
 
     let mut merged: Vec<RawHint> = match parallel {
         Ok(parts) => parts.into_iter().flatten().collect(),
-        Err(_) => return collect_from_descendants_array(&all, opts, hwnd, None, None, true),
+        Err(_) => {
+            let hints = collect_from_descendants_array(
+                &all,
+                opts,
+                hwnd,
+                None,
+                None,
+                true,
+                &reject_sink,
+            )?;
+            return Ok(NavEnumerateResult {
+                hints,
+                debug_rejects: take_rejects(&reject_sink),
+            });
+        }
     };
 
     for &j in &no_hwnd_indices {
@@ -166,6 +250,7 @@ pub fn enumerate_baseline(
             None,
             Some(j as u32),
             sub_cached,
+            &reject_sink,
         )?);
     }
 
@@ -177,7 +262,45 @@ pub fn enumerate_baseline(
             .then_with(|| a.element_id.cmp(&b.element_id))
     });
     merged.truncate(opts.max_elements);
-    Ok(merged)
+    Ok(NavEnumerateResult {
+        hints: merged,
+        debug_rejects: take_rejects(&reject_sink),
+    })
+}
+
+fn take_rejects(sink: &Option<Arc<Mutex<Vec<UiaDebugReject>>>>) -> Vec<UiaDebugReject> {
+    sink.as_ref()
+        .map(|a| std::mem::take(&mut *a.lock().unwrap()))
+        .unwrap_or_default()
+}
+
+fn push_reject(
+    sink: &Option<Arc<Mutex<Vec<UiaDebugReject>>>>,
+    opts: &EnumOptions,
+    reason: &str,
+    bounds: Option<Rect>,
+) {
+    if !opts.debug_overlay {
+        return;
+    }
+    let Some(a) = sink else {
+        return;
+    };
+    a.lock()
+        .unwrap()
+        .push(UiaDebugReject {
+            bounds,
+            reason: reason.into(),
+        });
+}
+
+fn try_element_bounds(el: &IUIAutomationElement, from_cache: bool) -> Option<Rect> {
+    let r = if from_cache {
+        unsafe { el.CachedBoundingRectangle() }.ok()?
+    } else {
+        unsafe { el.CurrentBoundingRectangle() }.ok()?
+    };
+    rect_from_uia_bounds(r)
 }
 
 fn rect_center_inside_hwnd(rect: &Rect, root: HWND) -> bool {
@@ -203,6 +326,7 @@ fn collect_from_descendants_array(
     scope_hwnd: Option<HWND>,
     child_index: Option<u32>,
     patterns_from_cache: bool,
+    reject_sink: &Option<Arc<Mutex<Vec<UiaDebugReject>>>>,
 ) -> Result<Vec<RawHint>, UiaError> {
     let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
     let mut out = Vec::new();
@@ -228,6 +352,12 @@ fn collect_from_descendants_array(
                         "[uia-debug] skip idx={i} reason=no_interaction name={nm:?}"
                     );
                 }
+                push_reject(
+                    reject_sink,
+                    opts,
+                    "no_interaction",
+                    try_element_bounds(&el, patterns_from_cache),
+                );
                 continue;
             }
         };
@@ -243,12 +373,24 @@ fn collect_from_descendants_array(
                     if opts.debug_uia {
                         eprintln!("[uia-debug] skip idx={i} reason=disabled");
                     }
+                    push_reject(
+                        reject_sink,
+                        opts,
+                        "disabled",
+                        try_element_bounds(&el, patterns_from_cache),
+                    );
                     continue;
                 }
                 Err(_) => {
                     if opts.debug_uia {
                         eprintln!("[uia-debug] skip idx={i} reason=enabled_err");
                     }
+                    push_reject(
+                        reject_sink,
+                        opts,
+                        "enabled_err",
+                        try_element_bounds(&el, patterns_from_cache),
+                    );
                     continue;
                 }
                 _ => {}
@@ -266,6 +408,12 @@ fn collect_from_descendants_array(
                     if opts.debug_uia {
                         eprintln!("[uia-debug] skip idx={i} reason=offscreen");
                     }
+                    push_reject(
+                        reject_sink,
+                        opts,
+                        "offscreen",
+                        try_element_bounds(&el, patterns_from_cache),
+                    );
                     continue;
                 }
                 Err(_) => {}
@@ -285,6 +433,7 @@ fn collect_from_descendants_array(
                     if opts.debug_uia {
                         eprintln!("[uia-debug] skip idx={i} reason=no_or_zero_rect");
                     }
+                    push_reject(reject_sink, opts, "no_or_zero_rect", None);
                     continue;
                 }
             },
@@ -292,6 +441,7 @@ fn collect_from_descendants_array(
                 if opts.debug_uia {
                     eprintln!("[uia-debug] skip idx={i} reason=bounds_err");
                 }
+                push_reject(reject_sink, opts, "bounds_err", None);
                 continue;
             }
         };
@@ -303,6 +453,12 @@ fn collect_from_descendants_array(
                     rect.x, rect.y, rect.w, rect.h
                 );
             }
+            push_reject(
+                reject_sink,
+                opts,
+                "outside_root_window",
+                Some(rect),
+            );
             continue;
         }
 
@@ -402,6 +558,7 @@ fn enumerate_hwnd_subtree_parallel(
     sub: HWND,
     opts: &EnumOptions,
     session_root: HWND,
+    reject_sink: &Option<Arc<Mutex<Vec<UiaDebugReject>>>>,
 ) -> Result<Vec<RawHint>, UiaError> {
     with_parcel_worker(|automation, cache| {
         if sub.is_invalid() {
@@ -416,6 +573,14 @@ fn enumerate_hwnd_subtree_parallel(
         };
         let (all, cached) =
             descendants_cached_or_uncached(&root, TreeScope_Descendants, &find_cond, cache)?;
-        collect_from_descendants_array(&all, opts, session_root, Some(sub), None, cached)
+        collect_from_descendants_array(
+            &all,
+            opts,
+            session_root,
+            Some(sub),
+            None,
+            cached,
+            reject_sink,
+        )
     })
 }

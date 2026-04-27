@@ -12,6 +12,7 @@ pub mod hint;
 pub mod label;
 pub mod planner;
 pub mod session;
+pub mod uia_debug;
 
 pub use error::NavError;
 pub use filter::{FilterResult, filter};
@@ -20,3 +21,4 @@ pub use hint::{Backend, ElementKind, Hint, HintId, RawHint};
 pub use label::generate_labels;
 pub use planner::plan;
 pub use session::{Session, SessionEvent};
+pub use uia_debug::{NavEnumerateResult, UiaDebugReject};

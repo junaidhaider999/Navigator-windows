@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use nav_core::Hint;
+use nav_core::{Hint, UiaDebugReject};
 use tracing::debug;
 use windows::Win32::Foundation::{BOOL, HMODULE, HWND, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
@@ -44,7 +44,7 @@ use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
 use windows::core::{Interface, w};
 
 use crate::RenderError;
-use crate::scene::{self, PillGeom};
+use crate::scene::{self, DebugRegionGeom, PillGeom};
 
 const FRAME_BUDGET: Duration = Duration::from_millis(4);
 
@@ -69,11 +69,13 @@ pub struct D2dCompositionRenderer {
     pill_fill: ID2D1SolidColorBrush,
     pill_border: ID2D1SolidColorBrush,
     pill_text: ID2D1SolidColorBrush,
+    debug_fill: ID2D1SolidColorBrush,
     /// `Present(0, ALLOW_TEARING)` is only valid when the swap chain was created with
     /// [`DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING`] after a successful factory check.
     present_allow_tearing: bool,
     swap_chain_flags: DXGI_SWAP_CHAIN_FLAG,
     last_pills: Vec<PillGeom>,
+    last_debug: Vec<DebugRegionGeom>,
 }
 
 impl D2dCompositionRenderer {
@@ -230,6 +232,9 @@ impl D2dCompositionRenderer {
         let pill_text = d2d_ctx
             .CreateSolidColorBrush(&scene::pill_text_color(), None)
             .map_err(|e| RenderError::Win32(e.to_string()))?;
+        let debug_fill = d2d_ctx
+            .CreateSolidColorBrush(&scene::debug_region_fill_color(), None)
+            .map_err(|e| RenderError::Win32(e.to_string()))?;
 
         let origin = window_origin_phys(hwnd)?;
         let last_pills = scene::pills_for_frame(
@@ -259,9 +264,11 @@ impl D2dCompositionRenderer {
             pill_fill,
             pill_border,
             pill_text,
+            debug_fill,
             present_allow_tearing,
             swap_chain_flags,
             last_pills,
+            last_debug: Vec::new(),
         })
     }
 
@@ -298,6 +305,7 @@ impl D2dCompositionRenderer {
             client_h_dips(nh, dpi),
             dpi,
         );
+        self.last_debug.clear();
         self.dcomp
             .Commit()
             .map_err(|e| RenderError::Win32(e.to_string()))?;
@@ -305,7 +313,11 @@ impl D2dCompositionRenderer {
     }
 
     /// Rebuild scene from hints and present. Returns wall time spent in D2D + Present + Commit.
-    pub unsafe fn update_and_present(&mut self, hints: &[Hint]) -> Result<Duration, RenderError> {
+    pub unsafe fn update_and_present(
+        &mut self,
+        hints: &[Hint],
+        debug_rejects: &[UiaDebugReject],
+    ) -> Result<Duration, RenderError> {
         let t0 = Instant::now();
         self.sync_size_and_dpi()?;
 
@@ -313,11 +325,20 @@ impl D2dCompositionRenderer {
         let ch = client_h_dips(self.pixel_h, self.dpi);
         let origin = window_origin_phys(self.hwnd)?;
         let new_pills = scene::pills_for_frame(hints, origin, cw, ch, self.dpi);
+        let new_debug = scene::debug_regions_for_frame(debug_rejects, origin, cw, ch, self.dpi);
         if matches!(
-            scene::paint_plan(&self.last_pills, &new_pills, cw, ch),
+            scene::overlay_paint_plan(
+                &self.last_pills,
+                &new_pills,
+                &self.last_debug,
+                &new_debug,
+                cw,
+                ch,
+            ),
             scene::PaintPlan::NoOp
         ) {
             self.last_pills = new_pills;
+            self.last_debug = new_debug;
             return Ok(t0.elapsed());
         }
 
@@ -353,6 +374,7 @@ impl D2dCompositionRenderer {
         };
 
         self.d2d_ctx.Clear(Some(&clear));
+        scene::draw_debug_regions(&self.d2d_ctx, &new_debug, &self.debug_fill)?;
         scene::draw_pills(
             &self.d2d_ctx,
             &self.text_format,
@@ -365,6 +387,7 @@ impl D2dCompositionRenderer {
         )?;
 
         self.last_pills = new_pills;
+        self.last_debug = new_debug;
 
         self.d2d_ctx
             .EndDraw(None, None)

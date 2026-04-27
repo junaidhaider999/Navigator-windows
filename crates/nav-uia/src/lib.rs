@@ -30,7 +30,7 @@ mod runtime;
 pub use runtime::UiaRuntime;
 
 #[cfg(not(windows))]
-use nav_core::{Hint, RawHint};
+use nav_core::{Hint, NavEnumerateResult};
 
 #[cfg(not(windows))]
 /// Stub runtime (all methods error with [`UiaError::UnsupportedPlatform`]).
@@ -42,7 +42,11 @@ impl UiaRuntime {
         Err(UiaError::UnsupportedPlatform)
     }
 
-    pub fn enumerate(&self, _hwnd: UiaHwnd, _opts: &EnumOptions) -> Result<Vec<RawHint>, UiaError> {
+    pub fn enumerate(
+        &self,
+        _hwnd: UiaHwnd,
+        _opts: &EnumOptions,
+    ) -> Result<NavEnumerateResult, UiaError> {
         Err(UiaError::UnsupportedPlatform)
     }
 

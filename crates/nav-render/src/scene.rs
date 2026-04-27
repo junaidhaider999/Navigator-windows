@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use nav_core::Hint;
+use nav_core::{Hint, UiaDebugReject};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_POINT_2F, D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_DRAW_TEXT_OPTIONS_CLIP,
@@ -25,6 +25,12 @@ use crate::RenderError;
 pub struct PillGeom {
     pub rect: D2D_RECT_F,
     pub label: String,
+}
+
+/// Semi-transparent debug rectangle (rejected UIA candidate) in client DIPs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebugRegionGeom {
+    pub rect: D2D_RECT_F,
 }
 
 /// Whether this frame can skip work or must clear and redraw all pills.
@@ -81,11 +87,32 @@ pub fn pills_geometrically_equal(a: &[PillGeom], b: &[PillGeom]) -> bool {
     true
 }
 
-/// Decide no-op vs full redraw (`client_w` / `client_h` kept for a stable API).
+fn debug_regions_equal(a: &[DebugRegionGeom], b: &[DebugRegionGeom]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for (x, y) in a.iter().zip(b.iter()) {
+        if !rects_equal(x.rect, y.rect) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Decide no-op vs full redraw when pills and optional debug regions are unchanged.
+///
+/// For pill-only frames, pass empty slices for `old_debug` / `new_debug`.
 #[must_use]
-pub fn paint_plan(old: &[PillGeom], new: &[PillGeom], client_w: f32, client_h: f32) -> PaintPlan {
+pub fn overlay_paint_plan(
+    old_pills: &[PillGeom],
+    new_pills: &[PillGeom],
+    old_debug: &[DebugRegionGeom],
+    new_debug: &[DebugRegionGeom],
+    client_w: f32,
+    client_h: f32,
+) -> PaintPlan {
     let _ = (client_w, client_h);
-    if pills_geometrically_equal(old, new) {
+    if pills_geometrically_equal(old_pills, new_pills) && debug_regions_equal(old_debug, new_debug) {
         PaintPlan::NoOp
     } else {
         PaintPlan::Full
@@ -214,6 +241,41 @@ fn choose_pill_rect(
 }
 
 /// `overlay_origin_phys` is the overlay HWND top-left in physical screen pixels (matches UIA bounds).
+/// Maps rejected UIA rows to client-space rectangles (clipped to the overlay client).
+pub fn debug_regions_for_frame(
+    rejects: &[UiaDebugReject],
+    overlay_origin_phys: (i32, i32),
+    client_w: f32,
+    client_h: f32,
+    dpi: f32,
+) -> Vec<DebugRegionGeom> {
+    let (ox, oy) = overlay_origin_phys;
+    let scale = 96.0 / dpi;
+    let mut out = Vec::new();
+    for r in rejects {
+        let Some(b) = r.bounds else {
+            continue;
+        };
+        if b.w <= 0 || b.h <= 0 {
+            continue;
+        }
+        let left = (b.x - ox) as f32 * scale;
+        let top = (b.y - oy) as f32 * scale;
+        let right = left + b.w as f32 * scale;
+        let bottom = top + b.h as f32 * scale;
+        let rect = D2D_RECT_F {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        if let Some(clamped) = clamp_pill_to_client(rect, client_w, client_h) {
+            out.push(DebugRegionGeom { rect: clamped });
+        }
+    }
+    out
+}
+
 pub fn pills_for_frame(
     hints: &[Hint],
     overlay_origin_phys: (i32, i32),
@@ -248,6 +310,19 @@ pub fn pills_for_frame(
 const CORNER_RADIUS: f32 = 8.0;
 
 /// Fills rounded pills and draws centered labels. Call inside `BeginDraw`/`EndDraw`.
+/// Fills translucent debug rectangles (drawn under pills).
+pub unsafe fn draw_debug_regions(
+    dc: &ID2D1DeviceContext,
+    regions: &[DebugRegionGeom],
+    fill: &ID2D1SolidColorBrush,
+) -> Result<(), RenderError> {
+    dc.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    for r in regions {
+        dc.FillRectangle(&r.rect, fill);
+    }
+    Ok(())
+}
+
 pub unsafe fn draw_pills(
     dc: &ID2D1DeviceContext,
     text_format: &IDWriteTextFormat,
@@ -328,6 +403,15 @@ pub fn pill_text_color() -> D2D1_COLOR_F {
     }
 }
 
+pub fn debug_region_fill_color() -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: 0.95,
+        g: 0.35,
+        b: 0.1,
+        a: 0.32,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,7 +462,10 @@ mod tests {
                 bottom: 10.0,
             },
         )];
-        assert_eq!(paint_plan(&p, &p, 100.0, 100.0), PaintPlan::NoOp);
+        assert_eq!(
+            overlay_paint_plan(&p, &p, &[], &[], 100.0, 100.0),
+            PaintPlan::NoOp
+        );
     }
 
     #[test]
@@ -412,7 +499,10 @@ mod tests {
                 bottom: 40.0,
             },
         )];
-        assert_eq!(paint_plan(&old, &new, 400.0, 300.0), PaintPlan::Full);
+        assert_eq!(
+            overlay_paint_plan(&old, &new, &[], &[], 400.0, 300.0),
+            PaintPlan::Full
+        );
     }
 
     #[test]
@@ -427,7 +517,10 @@ mod tests {
             },
         )];
         let new: Vec<PillGeom> = vec![];
-        assert_eq!(paint_plan(&old, &new, 100.0, 100.0), PaintPlan::Full);
+        assert_eq!(
+            overlay_paint_plan(&old, &new, &[], &[], 100.0, 100.0),
+            PaintPlan::Full
+        );
     }
 
     #[test]

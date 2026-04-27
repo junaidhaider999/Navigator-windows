@@ -21,7 +21,7 @@ use std::thread::JoinHandle;
 #[cfg(windows)]
 use crossbeam_channel::{Sender, unbounded};
 #[cfg(windows)]
-use nav_core::Hint;
+use nav_core::{Hint, UiaDebugReject};
 
 /// Owns the render worker thread and sends [`overlay::RenderCmd`] commands.
 #[cfg(windows)]
@@ -54,11 +54,17 @@ impl Renderer {
 
     /// Shows the overlay for `session_id`. `hints` are copied to the worker; C2 draws the demo
     /// pill strip (see `04-build-order.md`); C3 will use real bounds.
-    pub fn show(&self, session_id: u64, hints: &[Hint]) -> Result<(), RenderError> {
+    pub fn show(
+        &self,
+        session_id: u64,
+        hints: &[Hint],
+        debug_rejects: &[UiaDebugReject],
+    ) -> Result<(), RenderError> {
         self.cmd
             .send(overlay::RenderCmd::Show {
                 session_id,
                 hints: hints.to_vec(),
+                debug_rejects: debug_rejects.to_vec(),
             })
             .map_err(|_| RenderError::Disconnected)
     }
@@ -70,11 +76,17 @@ impl Renderer {
     }
 
     /// Updates pill geometry for an already-shown `session_id` (does not change `max_show_accepted`).
-    pub fn repaint(&self, session_id: u64, hints: &[Hint]) -> Result<(), RenderError> {
+    pub fn repaint(
+        &self,
+        session_id: u64,
+        hints: &[Hint],
+        debug_rejects: &[UiaDebugReject],
+    ) -> Result<(), RenderError> {
         self.cmd
             .send(overlay::RenderCmd::Repaint {
                 session_id,
                 hints: hints.to_vec(),
+                debug_rejects: debug_rejects.to_vec(),
             })
             .map_err(|_| RenderError::Disconnected)
     }

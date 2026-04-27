@@ -1,7 +1,7 @@
 //! Layered popups: one borderless topmost window per display (C2: D2D + DirectComposition).
 
 use crossbeam_channel::Receiver;
-use nav_core::Hint;
+use nav_core::{Hint, UiaDebugReject};
 use windows::Win32::Foundation::{
     COLORREF, ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT,
     RECT, RPC_E_CHANGED_MODE, WPARAM,
@@ -30,10 +30,12 @@ pub(crate) enum RenderCmd {
     Show {
         session_id: u64,
         hints: Vec<Hint>,
+        debug_rejects: Vec<UiaDebugReject>,
     },
     Repaint {
         session_id: u64,
         hints: Vec<Hint>,
+        debug_rejects: Vec<UiaDebugReject>,
     },
     Hide {
         session_id: u64,
@@ -208,6 +210,22 @@ fn partition_hints(hints: &[Hint], monitors: &[RECT]) -> Vec<Vec<Hint>> {
     out
 }
 
+fn partition_debug_rejects(rejects: &[UiaDebugReject], monitors: &[RECT]) -> Vec<Vec<UiaDebugReject>> {
+    let mut out: Vec<Vec<UiaDebugReject>> = (0..monitors.len()).map(|_| Vec::new()).collect();
+    for r in rejects {
+        let Some(b) = r.bounds else {
+            continue;
+        };
+        let (cx, cy) = b.center();
+        let idx = monitors
+            .iter()
+            .position(|m| physical_point_in_monitor_rect(cx, cy, m))
+            .unwrap_or(0);
+        out[idx].push(r.clone());
+    }
+    out
+}
+
 pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
     let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     if hr.is_err() && hr != RPC_E_CHANGED_MODE {
@@ -235,7 +253,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     st.sync_to_monitors()?;
                     for s in &mut st.slots {
                         if let Some(ref mut g) = s.gpu {
-                            g.update_and_present(&[])?;
+                            g.update_and_present(&[], &[])?;
                         }
                         let _ = ShowWindow(s.hwnd, SW_HIDE);
                         s.visible = false;
@@ -247,7 +265,11 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     Err(e) => eprintln!("[render] prewarm failed: {e}"),
                 }
             }
-            RenderCmd::Show { session_id, hints } => {
+            RenderCmd::Show {
+                session_id,
+                hints,
+                debug_rejects,
+            } => {
                 if session_id <= max_show_accepted {
                     if let Some(ref st) = stack {
                         unsafe { st.pump_all_hwnds() };
@@ -265,11 +287,17 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     }
                     let monitors: Vec<RECT> = st.slots.iter().map(|s| s.monitor).collect();
                     let parts = partition_hints(&hints, &monitors);
-                    for (s, part) in st.slots.iter_mut().zip(parts.iter()) {
+                    let dbg_parts = partition_debug_rejects(&debug_rejects, &monitors);
+                    for ((s, part), dpart) in st
+                        .slots
+                        .iter_mut()
+                        .zip(parts.iter())
+                        .zip(dbg_parts.iter())
+                    {
                         if let Some(ref mut g) = s.gpu {
-                            g.update_and_present(part)?;
+                            g.update_and_present(part, dpart)?;
                         }
-                        if part.is_empty() {
+                        if part.is_empty() && dpart.is_empty() {
                             let _ = ShowWindow(s.hwnd, SW_HIDE);
                             s.visible = false;
                         } else {
@@ -287,7 +315,11 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     Err(e) => eprintln!("[render] show failed: {e}"),
                 }
             }
-            RenderCmd::Repaint { session_id, hints } => {
+            RenderCmd::Repaint {
+                session_id,
+                hints,
+                debug_rejects,
+            } => {
                 if displayed_session != Some(session_id) {
                     if let Some(ref st) = stack {
                         unsafe { st.pump_all_hwnds() };
@@ -301,11 +333,17 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     st.sync_to_monitors()?;
                     let monitors: Vec<RECT> = st.slots.iter().map(|s| s.monitor).collect();
                     let parts = partition_hints(&hints, &monitors);
-                    for (s, part) in st.slots.iter_mut().zip(parts.iter()) {
+                    let dbg_parts = partition_debug_rejects(&debug_rejects, &monitors);
+                    for ((s, part), dpart) in st
+                        .slots
+                        .iter_mut()
+                        .zip(parts.iter())
+                        .zip(dbg_parts.iter())
+                    {
                         if let Some(ref mut g) = s.gpu {
-                            g.update_and_present(part)?;
+                            g.update_and_present(part, dpart)?;
                         }
-                        if part.is_empty() {
+                        if part.is_empty() && dpart.is_empty() {
                             let _ = ShowWindow(s.hwnd, SW_HIDE);
                             s.visible = false;
                         } else {

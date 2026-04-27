@@ -18,6 +18,8 @@ pub struct EnumOptions {
     pub fallback: FallbackPolicy,
     /// When true, log each skipped UIA node during enumeration to stderr (`[uia-debug]`).
     pub debug_uia: bool,
+    /// When true, record skipped nodes with bounds (when known) for a visual debug overlay.
+    pub debug_overlay: bool,
 }
 
 impl Default for EnumOptions {
@@ -28,6 +30,7 @@ impl Default for EnumOptions {
             include_disabled: false,
             fallback: FallbackPolicy::Auto,
             debug_uia: false,
+            debug_overlay: false,
         }
     }
 }

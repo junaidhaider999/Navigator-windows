@@ -14,7 +14,7 @@ fn main() -> std::process::ExitCode {
     use std::sync::atomic::Ordering;
 
     use clap::Parser;
-    use nav_core::{Session, SessionEvent, plan};
+    use nav_core::{Session, SessionEvent, plan, NavEnumerateResult};
     use nav_input::{InputEvent, InputThread, SessionKey};
     use nav_render::Renderer;
     use nav_uia::{EnumOptions, UiaRuntime};
@@ -31,6 +31,9 @@ fn main() -> std::process::ExitCode {
         /// Log skipped UIA nodes during enumeration (`[uia-debug]`, stderr).
         #[arg(long)]
         debug_uia: bool,
+        /// Draw translucent rects for nodes skipped after UIA match (diagnostics).
+        #[arg(long)]
+        debug_overlay: bool,
     }
 
     let cli = Cli::parse();
@@ -75,12 +78,17 @@ fn main() -> std::process::ExitCode {
     }
     let enum_opts = EnumOptions {
         debug_uia: cli.debug_uia,
+        debug_overlay: cli.debug_overlay,
         ..Default::default()
     };
     let mut overlay_session: u64 = 0;
     let mut active_show_id: Option<u64> = None;
     let mut session: Option<Session> = None;
     let mut session_hwnd: Option<HWND> = None;
+    // Rejects from the last successful enumeration; forwarded on each repaint.
+    let mut active_debug_rejects: Vec<nav_core::UiaDebugReject> = Vec::new();
+    // Overlay shows only debug rects (no actionable hints); only Escape dismisses.
+    let mut overlay_debug_only: bool = false;
     let alphabet: Vec<char> = "sadfjklewcmpgh".chars().collect();
 
     println!("Navigator ready");
@@ -96,6 +104,8 @@ fn main() -> std::process::ExitCode {
                 if input.hint_mode.load(Ordering::Acquire) {
                     session = None;
                     session_hwnd = None;
+                    active_debug_rejects.clear();
+                    overlay_debug_only = false;
                     input.hint_mode.store(false, Ordering::Release);
                     if let Some(sid) = active_show_id.take() {
                         let _ = renderer.hide(sid);
@@ -140,15 +150,18 @@ fn main() -> std::process::ExitCode {
                     0.0
                 };
 
-                let raws = match enum_res {
-                    Ok(elements) => {
+                let NavEnumerateResult {
+                    hints: raws,
+                    debug_rejects,
+                } = match enum_res {
+                    Ok(res) => {
                         println!(
                             "[uia] hwnd=0x{:x} elements={} took_ms={:.2}",
                             p.captured_hwnd,
-                            elements.len(),
+                            res.hints.len(),
                             took_ms
                         );
-                        elements
+                        res
                     }
                     Err(e) => {
                         eprintln!("[uia] error: {e}");
@@ -178,18 +191,27 @@ fn main() -> std::process::ExitCode {
                 sess.ingest(hints);
                 let initial = sess.visible_hints();
 
-                if initial.is_empty() {
+                active_debug_rejects = debug_rejects;
+                overlay_debug_only = initial.is_empty() && !active_debug_rejects.is_empty();
+
+                if initial.is_empty() && active_debug_rejects.is_empty() {
                     session = None;
                     session_hwnd = None;
                     active_show_id = None;
+                    active_debug_rejects.clear();
+                    overlay_debug_only = false;
                     continue;
                 }
 
-                if let Err(e) = renderer.show(overlay_session, &initial) {
+                if let Err(e) =
+                    renderer.show(overlay_session, &initial, &active_debug_rejects)
+                {
                     eprintln!("[render] show: {e}");
                     session = None;
                     session_hwnd = None;
                     active_show_id = None;
+                    active_debug_rejects.clear();
+                    overlay_debug_only = false;
                     continue;
                 }
 
@@ -206,11 +228,27 @@ fn main() -> std::process::ExitCode {
                     input.hint_mode.store(false, Ordering::Release);
                     continue;
                 };
+
+                if overlay_debug_only {
+                    if matches!(sk, SessionKey::Escape) {
+                        input.hint_mode.store(false, Ordering::Release);
+                        let _ = renderer.hide(sid);
+                        active_show_id = None;
+                        session = None;
+                        session_hwnd = None;
+                        active_debug_rejects.clear();
+                        overlay_debug_only = false;
+                    }
+                    continue;
+                }
+
                 let Some(mut sess) = session.take() else {
                     input.hint_mode.store(false, Ordering::Release);
                     let _ = renderer.hide(sid);
                     active_show_id = None;
                     session_hwnd = None;
+                    active_debug_rejects.clear();
+                    overlay_debug_only = false;
                     continue;
                 };
 
@@ -223,7 +261,9 @@ fn main() -> std::process::ExitCode {
                 match event {
                     SessionEvent::Render(_) => {
                         let visible = sess.visible_hints();
-                        if let Err(e) = renderer.repaint(sid, &visible) {
+                        if let Err(e) =
+                            renderer.repaint(sid, &visible, &active_debug_rejects)
+                        {
                             eprintln!("[render] repaint: {e}");
                         }
                         session = Some(sess);
@@ -234,6 +274,8 @@ fn main() -> std::process::ExitCode {
                         input.hint_mode.store(false, Ordering::Release);
                         let _ = renderer.hide(sid);
                         active_show_id = None;
+                        active_debug_rejects.clear();
+                        overlay_debug_only = false;
                         if let (Some(hwnd), Some(h)) = (hwnd, hint) {
                             if let Err(e) = uia.invoke(hwnd, &h, &enum_opts) {
                                 eprintln!("[uia] invoke: {e}");
@@ -245,6 +287,8 @@ fn main() -> std::process::ExitCode {
                         let _ = renderer.hide(sid);
                         active_show_id = None;
                         session_hwnd = None;
+                        active_debug_rejects.clear();
+                        overlay_debug_only = false;
                     }
                 }
             }
