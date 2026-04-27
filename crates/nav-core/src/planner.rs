@@ -19,6 +19,7 @@ const W_SIZE: f32 = 0.2;
 /// use nav_core::{plan, RawHint, Rect, ElementKind, Backend};
 /// let raw = RawHint {
 ///     element_id: 1,
+///     uia_runtime_id_fp: None,
 ///     uia_invoke_hwnd: None,
 ///     uia_child_index: None,
 ///     bounds: Rect { x: 0, y: 0, w: 50, h: 20 },
@@ -94,7 +95,15 @@ fn priority_score(raw: &RawHint, focus_rect: Rect) -> f32 {
         1.0 / (1.0 + d as f32)
     };
     let kind = W_KIND * kind_weight(raw.kind);
-    let area = (raw.bounds.w as i64 * raw.bounds.h as i64).max(1) as f32;
+    let area_i = (raw.bounds.w as i64 * raw.bounds.h as i64).max(1);
+    let area = area_i as f32;
     let size_term = W_SIZE * (1.0 / area);
-    W_PROXIMITY * prox + kind + size_term
+    // Penalize huge container rects so short labels go to tighter, likely-real targets.
+    const LARGE_PX: i64 = 480_000; // ~800x600
+    let large_penalty = if area_i > LARGE_PX {
+        -0.35
+    } else {
+        0.0
+    };
+    W_PROXIMITY * prox + kind + size_term + large_penalty
 }

@@ -84,7 +84,12 @@ pub fn invoke_invoke_pattern(
         unsafe { all.GetElement(idx) }.map_err(|e| UiaError::Operation(e.to_string()))?
     };
 
-    dispatch_on_element(&el, hint)
+    dispatch_on_element(&el, hint)?;
+    eprintln!(
+        "[invoke] label={} backend=UIA kind={:?} success=true",
+        hint.label, hint.raw.kind
+    );
+    Ok(())
 }
 
 fn bounds_check(idx: i32, len: i32) -> Result<(), UiaError> {

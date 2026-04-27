@@ -421,6 +421,7 @@ mod tests {
         Hint {
             raw: RawHint {
                 element_id,
+                uia_runtime_id_fp: None,
                 uia_invoke_hwnd: None,
                 uia_child_index: None,
                 bounds: Rect { x, y, w, h },

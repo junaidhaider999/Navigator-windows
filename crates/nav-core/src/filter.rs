@@ -23,6 +23,7 @@ pub enum FilterResult<'a> {
 /// use nav_core::{filter, FilterResult, Hint, RawHint, Rect, ElementKind, Backend};
 /// let raw = RawHint {
 ///     element_id: 1,
+///     uia_runtime_id_fp: None,
 ///     uia_invoke_hwnd: None,
 ///     uia_child_index: None,
 ///     bounds: Rect { x: 0, y: 0, w: 10, h: 10 },
@@ -60,6 +61,7 @@ mod tests {
     fn sample_hints() -> Vec<Hint> {
         let raw = RawHint {
             element_id: 0,
+            uia_runtime_id_fp: None,
             uia_invoke_hwnd: None,
             uia_child_index: None,
             bounds: Rect {

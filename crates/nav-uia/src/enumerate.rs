@@ -4,12 +4,16 @@ use core::ffi::c_void;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
-use nav_core::{Backend, NavEnumerateResult, RawHint, Rect, UiaDebugReject};
+use nav_core::{Backend, NavEnumerateResult, RawHint, Rect, UiaDebugReject, fnv1a_hash_i32_slice};
 use rayon::prelude::*;
 use windows::Win32::Foundation::{HWND, RECT, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     CoUninitialize,
+};
+use windows::Win32::System::Com::SAFEARRAY;
+use windows::Win32::System::Ole::{
+    SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
 };
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, CUIAutomation8, IUIAutomation, IUIAutomationCacheRequest,
@@ -294,6 +298,41 @@ fn push_reject(
         });
 }
 
+/// FNV-1a hash of UIA `RuntimeId` (stable identity for deduplication).
+unsafe fn uia_runtime_id_fingerprint(el: &IUIAutomationElement) -> Option<u64> {
+    unsafe {
+        let psa = el.GetRuntimeId().ok()?;
+        if psa.is_null() {
+            return None;
+        }
+        let out = runtime_id_from_safearray(psa);
+        let _ = SafeArrayDestroy(psa);
+        out
+    }
+}
+
+unsafe fn runtime_id_from_safearray(psa: *mut SAFEARRAY) -> Option<u64> {
+    unsafe {
+        let l = SafeArrayGetLBound(psa, 1).ok()? as i32;
+        let u = SafeArrayGetUBound(psa, 1).ok()? as i32;
+        if u < l {
+            return None;
+        }
+        let mut parts = Vec::with_capacity((u - l + 1) as usize);
+        for idx in l..=u {
+            let mut v: i32 = 0;
+            SafeArrayGetElement(
+                psa,
+                &idx,
+                &mut v as *mut i32 as *mut c_void,
+            )
+            .ok()?;
+            parts.push(v);
+        }
+        Some(fnv1a_hash_i32_slice(&parts))
+    }
+}
+
 fn try_element_bounds(el: &IUIAutomationElement, from_cache: bool) -> Option<Rect> {
     let r = if from_cache {
         unsafe { el.CachedBoundingRectangle() }.ok()?
@@ -464,8 +503,11 @@ fn collect_from_descendants_array(
 
         let name = read_optional_name(&el, patterns_from_cache);
 
+        let uia_runtime_id_fp = unsafe { uia_runtime_id_fingerprint(&el) };
+
         out.push(RawHint {
             element_id: i as u64,
+            uia_runtime_id_fp,
             uia_invoke_hwnd: scope_hwnd.map(|h| h.0 as usize),
             uia_child_index: if scope_hwnd.is_none() {
                 child_index

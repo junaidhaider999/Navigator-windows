@@ -17,6 +17,8 @@ pub struct HintId(pub u32);
 #[derive(Clone, Debug, PartialEq)]
 pub struct RawHint {
     pub element_id: u64,
+    /// FNV fingerprint of UIA `RuntimeId` when known; used for deduplication (not used at invoke).
+    pub uia_runtime_id_fp: Option<u64>,
     /// When [`Backend::Uia`](Backend::Uia), optional native window used as the root for invoke:
     /// `element_id` indexes `FindAllBuildCache(TreeScope_Descendants)` from this HWND (parallel
     /// subtree enumeration). When `None`, invoke uses the session root HWND from the orchestrator.

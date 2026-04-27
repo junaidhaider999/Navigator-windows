@@ -152,7 +152,7 @@ fn main() -> std::process::ExitCode {
                 };
 
                 let NavEnumerateResult {
-                    hints: raws,
+                    hints: raws_in,
                     debug_rejects,
                 } = match enum_res {
                     Ok(res) => {
@@ -169,6 +169,12 @@ fn main() -> std::process::ExitCode {
                         continue;
                     }
                 };
+
+                let (raws, dedupe_stats) = nav_core::dedupe_raw_hints(raws_in);
+                eprintln!(
+                    "[dedupe] before={} after={} removed={}",
+                    dedupe_stats.before, dedupe_stats.after, dedupe_stats.removed
+                );
 
                 let mut wr = windows::Win32::Foundation::RECT::default();
                 let layout_origin = if unsafe { GetWindowRect(hwnd, &mut wr) }.is_ok() {
