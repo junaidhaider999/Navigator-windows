@@ -87,7 +87,7 @@ fn main() -> std::process::ExitCode {
     let mut session_hwnd: Option<HWND> = None;
     // Rejects from the last successful enumeration; forwarded on each repaint.
     let mut active_debug_rejects: Vec<nav_core::UiaDebugReject> = Vec::new();
-    // Overlay shows only debug rects (no actionable hints); only Escape dismisses.
+    // Overlay shows only debug rects (no actionable hints); Escape or activation hotkey dismisses.
     let mut overlay_debug_only: bool = false;
     let alphabet: Vec<char> = "sadfjklewcmpgh".chars().collect();
 
@@ -110,6 +110,7 @@ fn main() -> std::process::ExitCode {
                     if let Some(sid) = active_show_id.take() {
                         let _ = renderer.hide(sid);
                     }
+                    continue;
                 }
 
                 if p.captured_hwnd == 0 {
