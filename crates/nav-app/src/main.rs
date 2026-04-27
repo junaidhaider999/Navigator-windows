@@ -81,6 +81,7 @@ fn main() -> std::process::ExitCode {
         debug_overlay: cli.debug_overlay,
         ..Default::default()
     };
+    let debug_pill_connectors = cli.debug_overlay;
     let mut overlay_session: u64 = 0;
     let mut active_show_id: Option<u64> = None;
     let mut session: Option<Session> = None;
@@ -210,9 +211,12 @@ fn main() -> std::process::ExitCode {
                     continue;
                 }
 
-                if let Err(e) =
-                    renderer.show(overlay_session, &initial, &active_debug_rejects)
-                {
+                if let Err(e) = renderer.show(
+                    overlay_session,
+                    &initial,
+                    &active_debug_rejects,
+                    debug_pill_connectors,
+                ) {
                     eprintln!("[render] show: {e}");
                     session = None;
                     session_hwnd = None;
@@ -268,9 +272,12 @@ fn main() -> std::process::ExitCode {
                 match event {
                     SessionEvent::Render(_) => {
                         let visible = sess.visible_hints();
-                        if let Err(e) =
-                            renderer.repaint(sid, &visible, &active_debug_rejects)
-                        {
+                        if let Err(e) = renderer.repaint(
+                            sid,
+                            &visible,
+                            &active_debug_rejects,
+                            debug_pill_connectors,
+                        ) {
                             eprintln!("[render] repaint: {e}");
                         }
                         session = Some(sess);

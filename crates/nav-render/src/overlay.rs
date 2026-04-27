@@ -31,11 +31,14 @@ pub(crate) enum RenderCmd {
         session_id: u64,
         hints: Vec<Hint>,
         debug_rejects: Vec<UiaDebugReject>,
+        /// Pill center to element bbox lines (same flag as UIA `--debug-overlay`).
+        debug_connectors: bool,
     },
     Repaint {
         session_id: u64,
         hints: Vec<Hint>,
         debug_rejects: Vec<UiaDebugReject>,
+        debug_connectors: bool,
     },
     Hide {
         session_id: u64,
@@ -253,7 +256,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     st.sync_to_monitors()?;
                     for s in &mut st.slots {
                         if let Some(ref mut g) = s.gpu {
-                            g.update_and_present(&[], &[])?;
+                            g.update_and_present(&[], &[], false)?;
                         }
                         let _ = ShowWindow(s.hwnd, SW_HIDE);
                         s.visible = false;
@@ -269,6 +272,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                 session_id,
                 hints,
                 debug_rejects,
+                debug_connectors,
             } => {
                 if session_id <= max_show_accepted {
                     if let Some(ref st) = stack {
@@ -295,7 +299,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                         .zip(dbg_parts.iter())
                     {
                         if let Some(ref mut g) = s.gpu {
-                            g.update_and_present(part, dpart)?;
+                            g.update_and_present(part, dpart, debug_connectors)?;
                         }
                         if part.is_empty() && dpart.is_empty() {
                             let _ = ShowWindow(s.hwnd, SW_HIDE);
@@ -319,6 +323,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                 session_id,
                 hints,
                 debug_rejects,
+                debug_connectors,
             } => {
                 if displayed_session != Some(session_id) {
                     if let Some(ref st) = stack {
@@ -341,7 +346,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                         .zip(dbg_parts.iter())
                     {
                         if let Some(ref mut g) = s.gpu {
-                            g.update_and_present(part, dpart)?;
+                            g.update_and_present(part, dpart, debug_connectors)?;
                         }
                         if part.is_empty() && dpart.is_empty() {
                             let _ = ShowWindow(s.hwnd, SW_HIDE);

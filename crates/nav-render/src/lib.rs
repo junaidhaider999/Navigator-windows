@@ -59,12 +59,14 @@ impl Renderer {
         session_id: u64,
         hints: &[Hint],
         debug_rejects: &[UiaDebugReject],
+        debug_connectors: bool,
     ) -> Result<(), RenderError> {
         self.cmd
             .send(overlay::RenderCmd::Show {
                 session_id,
                 hints: hints.to_vec(),
                 debug_rejects: debug_rejects.to_vec(),
+                debug_connectors,
             })
             .map_err(|_| RenderError::Disconnected)
     }
@@ -81,12 +83,14 @@ impl Renderer {
         session_id: u64,
         hints: &[Hint],
         debug_rejects: &[UiaDebugReject],
+        debug_connectors: bool,
     ) -> Result<(), RenderError> {
         self.cmd
             .send(overlay::RenderCmd::Repaint {
                 session_id,
                 hints: hints.to_vec(),
                 debug_rejects: debug_rejects.to_vec(),
+                debug_connectors,
             })
             .map_err(|_| RenderError::Disconnected)
     }

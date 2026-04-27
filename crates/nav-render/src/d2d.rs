@@ -70,6 +70,7 @@ pub struct D2dCompositionRenderer {
     pill_border: ID2D1SolidColorBrush,
     pill_text: ID2D1SolidColorBrush,
     debug_fill: ID2D1SolidColorBrush,
+    pill_connector: ID2D1SolidColorBrush,
     /// `Present(0, ALLOW_TEARING)` is only valid when the swap chain was created with
     /// [`DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING`] after a successful factory check.
     present_allow_tearing: bool,
@@ -235,6 +236,9 @@ impl D2dCompositionRenderer {
         let debug_fill = d2d_ctx
             .CreateSolidColorBrush(&scene::debug_region_fill_color(), None)
             .map_err(|e| RenderError::Win32(e.to_string()))?;
+        let pill_connector = d2d_ctx
+            .CreateSolidColorBrush(&scene::pill_connector_color(), None)
+            .map_err(|e| RenderError::Win32(e.to_string()))?;
 
         let origin = window_origin_phys(hwnd)?;
         let last_pills = scene::pills_for_frame(
@@ -243,6 +247,7 @@ impl D2dCompositionRenderer {
             client_w_dips(pixel_w, dpi),
             client_h_dips(pixel_h, dpi),
             dpi,
+            false,
         );
 
         Ok(Self {
@@ -265,6 +270,7 @@ impl D2dCompositionRenderer {
             pill_border,
             pill_text,
             debug_fill,
+            pill_connector,
             present_allow_tearing,
             swap_chain_flags,
             last_pills,
@@ -304,6 +310,7 @@ impl D2dCompositionRenderer {
             client_w_dips(nw, dpi),
             client_h_dips(nh, dpi),
             dpi,
+            false,
         );
         self.last_debug.clear();
         self.dcomp
@@ -317,6 +324,7 @@ impl D2dCompositionRenderer {
         &mut self,
         hints: &[Hint],
         debug_rejects: &[UiaDebugReject],
+        debug_connectors: bool,
     ) -> Result<Duration, RenderError> {
         let t0 = Instant::now();
         self.sync_size_and_dpi()?;
@@ -324,7 +332,7 @@ impl D2dCompositionRenderer {
         let cw = client_w_dips(self.pixel_w, self.dpi);
         let ch = client_h_dips(self.pixel_h, self.dpi);
         let origin = window_origin_phys(self.hwnd)?;
-        let new_pills = scene::pills_for_frame(hints, origin, cw, ch, self.dpi);
+        let new_pills = scene::pills_for_frame(hints, origin, cw, ch, self.dpi, debug_connectors);
         let new_debug = scene::debug_regions_for_frame(debug_rejects, origin, cw, ch, self.dpi);
         if matches!(
             scene::overlay_paint_plan(
@@ -375,6 +383,12 @@ impl D2dCompositionRenderer {
 
         self.d2d_ctx.Clear(Some(&clear));
         scene::draw_debug_regions(&self.d2d_ctx, &new_debug, &self.debug_fill)?;
+        scene::draw_pill_connectors(
+            &self.d2d_ctx,
+            &new_pills,
+            &self.stroke,
+            &self.pill_connector,
+        )?;
         scene::draw_pills(
             &self.d2d_ctx,
             &self.text_format,

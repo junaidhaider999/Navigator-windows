@@ -7,10 +7,11 @@
 use std::collections::{HashMap, HashSet};
 
 use nav_core::{Hint, UiaDebugReject};
+use windows::core::Interface;
 use windows::Win32::Graphics::Direct2D::Common::{D2D_POINT_2F, D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_DRAW_TEXT_OPTIONS_CLIP,
-    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, D2D1_ROUNDED_RECT, ID2D1DeviceContext,
+    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, D2D1_ROUNDED_RECT, ID2D1Brush, ID2D1DeviceContext,
     ID2D1SolidColorBrush, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::DirectWrite::{
@@ -25,6 +26,10 @@ use crate::RenderError;
 pub struct PillGeom {
     pub rect: D2D_RECT_F,
     pub label: String,
+    /// Multiplier for pill fill/border/text brush opacity (`1.0` = full strength).
+    pub opacity: f32,
+    /// When connector drawing is enabled: pill center → backing element bbox
+    pub debug_connector: Option<(D2D_POINT_2F, D2D_POINT_2F)>,
 }
 
 /// Semi-transparent debug rectangle (rejected UIA candidate) in client DIPs.
@@ -59,6 +64,28 @@ fn rects_equal(a: D2D_RECT_F, b: D2D_RECT_F) -> bool {
         && (a.bottom - b.bottom).abs() <= f32::EPSILON
 }
 
+fn points_equal(a: D2D_POINT_2F, b: D2D_POINT_2F) -> bool {
+    (a.x - b.x).abs() <= f32::EPSILON && (a.y - b.y).abs() <= f32::EPSILON
+}
+
+fn connector_equal(
+    a: Option<(D2D_POINT_2F, D2D_POINT_2F)>,
+    b: Option<(D2D_POINT_2F, D2D_POINT_2F)>,
+) -> bool {
+    match (a, b) {
+        (
+            Some((pa0, pa1)),
+            Some((pb0, pb1)),
+        ) => points_equal(pa0, pb0) && points_equal(pa1, pb1),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn opacity_equal(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1e-4
+}
+
 /// Same set of (label, rect) pairs as last frame (order-independent); used to skip identical paints.
 pub fn pills_geometrically_equal(a: &[PillGeom], b: &[PillGeom]) -> bool {
     if duplicate_label(a) || duplicate_label(b) {
@@ -67,21 +94,31 @@ pub fn pills_geometrically_equal(a: &[PillGeom], b: &[PillGeom]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    let mut ma: HashMap<&str, D2D_RECT_F> = HashMap::with_capacity(a.len());
+    type V = (D2D_RECT_F, f32, Option<(D2D_POINT_2F, D2D_POINT_2F)>);
+    let mut ma: HashMap<&str, V> = HashMap::with_capacity(a.len());
     for p in a {
-        ma.insert(p.label.as_str(), p.rect);
+        ma.insert(
+            p.label.as_str(),
+            (p.rect, p.opacity, p.debug_connector),
+        );
     }
-    let mut mb: HashMap<&str, D2D_RECT_F> = HashMap::with_capacity(b.len());
+    let mut mb: HashMap<&str, V> = HashMap::with_capacity(b.len());
     for p in b {
-        mb.insert(p.label.as_str(), p.rect);
+        mb.insert(
+            p.label.as_str(),
+            (p.rect, p.opacity, p.debug_connector),
+        );
     }
     if ma.len() != mb.len() {
         return false;
     }
-    for (k, ra) in &ma {
-        match mb.get(k) {
-            Some(rb) if rects_equal(*ra, *rb) => {}
-            _ => return false,
+    for (k, (r_a, o_a, c_a)) in &ma {
+        let Some((r_b, o_b, c_b)) = mb.get(k) else {
+            return false;
+        };
+        if !(rects_equal(*r_a, *r_b) && opacity_equal(*o_a, *o_b) && connector_equal(*c_a, *c_b))
+        {
+            return false;
         }
     }
     true
@@ -309,18 +346,41 @@ pub fn debug_regions_for_frame(
     out
 }
 
+/// With several hints visible, soften low planner scores so dense layouts stay readable.
+fn pill_opacity_from_cluster(score: f32, max_score: f32, n_hints: usize) -> f32 {
+    const MIN_HINTS: usize = 3;
+    if n_hints < MIN_HINTS {
+        return 1.0;
+    }
+    if max_score <= 1e-8 || !max_score.is_finite() {
+        return 1.0;
+    }
+    let t = (score / max_score).clamp(0.0, 1.0);
+    0.48 + 0.52 * t
+}
+
 pub fn pills_for_frame(
     hints: &[Hint],
     overlay_origin_phys: (i32, i32),
     client_w: f32,
     client_h: f32,
     dpi: f32,
+    debug_connectors: bool,
 ) -> Vec<PillGeom> {
     if hints.is_empty() {
         return Vec::new();
     }
     let (ox, oy) = overlay_origin_phys;
     let scale = 96.0 / dpi;
+    let max_score = hints
+        .iter()
+        .map(|h| h.score)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let max_score = if max_score.is_finite() {
+        max_score
+    } else {
+        0.0
+    };
     let mut order: Vec<usize> = (0..hints.len()).collect();
     order.sort_by(|&a, &b| {
         hints[b]
@@ -340,9 +400,24 @@ pub fn pills_for_frame(
         if let Some(rect) = choose_pill_rect(
             el_left, el_top, el_w, el_h, pw, ph, &placed, client_w, client_h,
         ) {
+            let opacity = pill_opacity_from_cluster(h.score, max_score, hints.len());
+            let el_cx = el_left + el_w * 0.5;
+            let el_cy = el_top + el_h * 0.5;
+            let debug_connector = if debug_connectors {
+                let px = (rect.left + rect.right) * 0.5;
+                let py = (rect.top + rect.bottom) * 0.5;
+                Some((
+                    D2D_POINT_2F { x: px, y: py },
+                    D2D_POINT_2F { x: el_cx, y: el_cy },
+                ))
+            } else {
+                None
+            };
             placed.push(PillGeom {
                 rect,
                 label: h.label.to_string(),
+                opacity,
+                debug_connector,
             });
         }
     }
@@ -350,6 +425,36 @@ pub fn pills_for_frame(
 }
 
 const CORNER_RADIUS: f32 = 8.0;
+
+#[inline]
+unsafe fn solid_brush_set_opacity(
+    br: &ID2D1SolidColorBrush,
+    opacity: f32,
+) -> Result<(), RenderError> {
+    let b: ID2D1Brush = br.cast().map_err(|e| RenderError::Win32(e.to_string()))?;
+    b.SetOpacity(opacity);
+    Ok(())
+}
+
+/// Thin lines from pill center to backing element center (diagnostics). Draw before pills.
+pub unsafe fn draw_pill_connectors(
+    dc: &ID2D1DeviceContext,
+    pills: &[PillGeom],
+    stroke: &ID2D1StrokeStyle,
+    brush: &ID2D1SolidColorBrush,
+) -> Result<(), RenderError> {
+    dc.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    let line_br: ID2D1Brush = brush
+        .cast()
+        .map_err(|e| RenderError::Win32(e.to_string()))?;
+    for pill in pills {
+        let Some((from, to)) = pill.debug_connector else {
+            continue;
+        };
+        dc.DrawLine(from, to, &line_br, 1.35, stroke);
+    }
+    Ok(())
+}
 
 /// Fills rounded pills and draws centered labels. Call inside `BeginDraw`/`EndDraw`.
 /// Fills translucent debug rectangles (drawn under pills).
@@ -379,40 +484,53 @@ pub unsafe fn draw_pills(
     let opts = D2D1_DRAW_TEXT_OPTIONS_CLIP | D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT;
 
     for pill in pills {
-        let rr = D2D1_ROUNDED_RECT {
-            rect: pill.rect,
-            radiusX: CORNER_RADIUS,
-            radiusY: CORNER_RADIUS,
+        solid_brush_set_opacity(fill, pill.opacity)?;
+        solid_brush_set_opacity(border, pill.opacity)?;
+        solid_brush_set_opacity(text_brush, pill.opacity)?;
+
+        let draw_once = || -> Result<(), RenderError> {
+            let rr = D2D1_ROUNDED_RECT {
+                rect: pill.rect,
+                radiusX: CORNER_RADIUS,
+                radiusY: CORNER_RADIUS,
+            };
+            dc.FillRoundedRectangle(&rr, fill);
+            dc.DrawRoundedRectangle(&rr, border, 1.5, stroke);
+
+            let wlabel: Vec<u16> = pill.label.encode_utf16().collect();
+            let layout = write
+                .CreateTextLayout(
+                    &wlabel,
+                    text_format,
+                    (pill.rect.right - pill.rect.left).max(1.0),
+                    (pill.rect.bottom - pill.rect.top).max(1.0),
+                )
+                .map_err(|e| RenderError::Win32(e.to_string()))?;
+
+            layout
+                .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)
+                .map_err(|e| RenderError::Win32(e.to_string()))?;
+            layout
+                .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)
+                .map_err(|e| RenderError::Win32(e.to_string()))?;
+
+            dc.DrawTextLayout(
+                D2D_POINT_2F {
+                    x: pill.rect.left,
+                    y: pill.rect.top,
+                },
+                &layout,
+                text_brush,
+                opts,
+            );
+            Ok(())
         };
-        dc.FillRoundedRectangle(&rr, fill);
-        dc.DrawRoundedRectangle(&rr, border, 1.5, stroke);
 
-        let wlabel: Vec<u16> = pill.label.encode_utf16().collect();
-        let layout = write
-            .CreateTextLayout(
-                &wlabel,
-                text_format,
-                (pill.rect.right - pill.rect.left).max(1.0),
-                (pill.rect.bottom - pill.rect.top).max(1.0),
-            )
-            .map_err(|e| RenderError::Win32(e.to_string()))?;
-
-        layout
-            .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)
-            .map_err(|e| RenderError::Win32(e.to_string()))?;
-        layout
-            .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)
-            .map_err(|e| RenderError::Win32(e.to_string()))?;
-
-        dc.DrawTextLayout(
-            D2D_POINT_2F {
-                x: pill.rect.left,
-                y: pill.rect.top,
-            },
-            &layout,
-            text_brush,
-            opts,
-        );
+        let r = draw_once();
+        let _ = solid_brush_set_opacity(fill, 1.0);
+        let _ = solid_brush_set_opacity(border, 1.0);
+        let _ = solid_brush_set_opacity(text_brush, 1.0);
+        r?;
     }
     Ok(())
 }
@@ -442,6 +560,15 @@ pub fn pill_text_color() -> D2D1_COLOR_F {
         g: 1.0,
         b: 1.0,
         a: 1.0,
+    }
+}
+
+pub fn pill_connector_color() -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: 0.25,
+        g: 0.88,
+        b: 0.92,
+        a: 0.62,
     }
 }
 
@@ -503,6 +630,8 @@ mod tests {
         PillGeom {
             rect,
             label: label.into(),
+            opacity: 1.0,
+            debug_connector: None,
         }
     }
 
@@ -585,7 +714,7 @@ mod tests {
             hint_at("s", 2, 24, 0, 24, 24),
             hint_at("d", 3, 48, 0, 24, 24),
         ];
-        let pills = pills_for_frame(&hints, (0, 0), 800.0, 200.0, 96.0);
+        let pills = pills_for_frame(&hints, (0, 0), 800.0, 200.0, 96.0, false);
         assert_eq!(pills.len(), 3);
         assert!(
             !any_pairwise_overlap(&pills),
@@ -604,7 +733,7 @@ mod tests {
             hint_scored("low", 1, 0.1, x, y, w, h),
             hint_scored("high", 2, 10.0, x, y, w, h),
         ];
-        let pills = pills_for_frame(&low_first, (0, 0), 800.0, 600.0, 96.0);
+        let pills = pills_for_frame(&low_first, (0, 0), 800.0, 600.0, 96.0, false);
         assert_eq!(pills.len(), 2);
         let cx = (x + w / 2) as f32;
         let cy = (y + h / 2) as f32;
@@ -622,14 +751,47 @@ mod tests {
     }
 
     #[test]
+    fn cluster_scores_dim_lower_priority_pills() {
+        let hints = vec![
+            hint_scored("a", 1, 10.0, 0, 0, 28, 28),
+            hint_scored("b", 2, 6.0, 30, 0, 28, 28),
+            hint_scored("c", 3, 2.0, 60, 0, 28, 28),
+            hint_scored("d", 4, 0.5, 90, 0, 28, 28),
+        ];
+        let pills = pills_for_frame(&hints, (0, 0), 800.0, 200.0, 96.0, false);
+        let d = pills.iter().find(|p| p.label == "d").expect("d");
+        assert!(
+            d.opacity < 0.95,
+            "expected dimmed low score in cluster: {}",
+            d.opacity
+        );
+        let a = pills.iter().find(|p| p.label == "a").expect("a");
+        assert!(a.opacity > d.opacity, "a={} d={}", a.opacity, d.opacity);
+    }
+
+    #[test]
+    fn debug_connectors_when_requested() {
+        let hints = vec![hint_at("x", 1, 50, 50, 40, 40)];
+        let with_c = pills_for_frame(&hints, (0, 0), 800.0, 600.0, 96.0, true);
+        assert!(
+            with_c[0].debug_connector.is_some(),
+            "{:?}",
+            with_c[0].debug_connector
+        );
+        let without = pills_for_frame(&hints, (0, 0), 800.0, 600.0, 96.0, false);
+        assert!(without[0].debug_connector.is_none());
+    }
+
+    #[test]
     fn longer_label_increases_pill_width() {
-        let short = pills_for_frame(&[hint_at("a", 1, 0, 0, 40, 40)], (0, 0), 800.0, 600.0, 96.0);
+        let short = pills_for_frame(&[hint_at("a", 1, 0, 0, 40, 40)], (0, 0), 800.0, 600.0, 96.0, false);
         let long = pills_for_frame(
             &[hint_at("abc", 1, 0, 0, 40, 40)],
             (0, 0),
             800.0,
             600.0,
             96.0,
+            false,
         );
         assert_eq!(short.len(), 1);
         assert_eq!(long.len(), 1);
