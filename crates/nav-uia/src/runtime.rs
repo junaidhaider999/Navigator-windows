@@ -1,5 +1,7 @@
 //! `UiaRuntime`: COM apartment + `CUIAutomation8` (fallback `CUIAutomation`) singleton.
 
+use std::sync::Mutex;
+
 use nav_core::{Hint, RawHint};
 use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows::Win32::System::Com::{
@@ -7,15 +9,24 @@ use windows::Win32::System::Com::{
     CoUninitialize,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, CUIAutomation8, IUIAutomation, IUIAutomationCacheRequest,
+    CUIAutomation, CUIAutomation8, IUIAutomation, IUIAutomationCacheRequest, IUIAutomationCondition,
 };
 
 use crate::UiaError;
-use crate::cache::{create_enumeration_cache_request, create_invoke_findall_cache_request};
+use crate::cache::{
+    create_enumeration_cache_request, create_invoke_findall_cache_request,
+    create_invoke_targets_find_condition,
+};
 use crate::enumerate::enumerate_baseline;
 use crate::hwnd::UiaHwnd;
 use crate::invoke::invoke_invoke_pattern;
 use crate::options::{EnumOptions, FallbackPolicy};
+
+struct CachedFindDescendantsCondition {
+    include_disabled: bool,
+    include_offscreen: bool,
+    condition: IUIAutomationCondition,
+}
 
 /// UI Automation client (D1: shared enumeration cache request).
 pub struct UiaRuntime {
@@ -23,6 +34,8 @@ pub struct UiaRuntime {
     enum_cache: IUIAutomationCacheRequest,
     /// `FindAllBuildCache` for invoke only (`AutomationElementMode_Full`); see `invoke.rs`.
     invoke_find_cache: IUIAutomationCacheRequest,
+    /// Last compound `FindAll` condition for descendants (matches `EnumOptions` filters).
+    find_descendants_cond_cache: Mutex<Option<CachedFindDescendantsCondition>>,
     /// Call [`CoUninitialize`](CoUninitialize) only if this instance successfully called `CoInitializeEx` first on this thread.
     co_uninit_on_drop: bool,
 }
@@ -82,8 +95,35 @@ impl UiaRuntime {
             automation,
             enum_cache,
             invoke_find_cache,
+            find_descendants_cond_cache: Mutex::new(None),
             co_uninit_on_drop,
         })
+    }
+
+    fn find_descendants_condition(
+        &self,
+        opts: &EnumOptions,
+    ) -> Result<IUIAutomationCondition, UiaError> {
+        let mut guard = self.find_descendants_cond_cache.lock().unwrap();
+        if let Some(c) = guard.as_ref() {
+            if c.include_disabled == opts.include_disabled
+                && c.include_offscreen == opts.include_offscreen
+            {
+                return Ok(c.condition.clone());
+            }
+        }
+        let condition = match create_invoke_targets_find_condition(&self.automation, opts) {
+            Ok(c) => c,
+            Err(_) => unsafe { self.automation.CreateTrueCondition() }.map_err(|e| {
+                UiaError::Operation(format!("CreateTrueCondition (find fallback): {e}"))
+            })?,
+        };
+        *guard = Some(CachedFindDescendantsCondition {
+            include_disabled: opts.include_disabled,
+            include_offscreen: opts.include_offscreen,
+            condition: condition.clone(),
+        });
+        Ok(condition)
     }
 
     /// Enumerate invoke targets for the window captured at hotkey time (D1 cache).
@@ -93,12 +133,34 @@ impl UiaRuntime {
                 "MsaaOnly is not implemented in the B3 baseline",
             ));
         }
-        enumerate_baseline(&self.automation, hwnd, opts, &self.enum_cache)
+        let find_cond = self.find_descendants_condition(opts)?;
+        enumerate_baseline(
+            &self.automation,
+            hwnd,
+            opts,
+            &self.enum_cache,
+            &find_cond,
+        )
     }
 
     /// Pattern dispatch: `Invoke` on the element located at the same `FindAll` index as enumeration.
-    pub fn invoke(&self, hwnd: UiaHwnd, hint: &Hint) -> Result<(), UiaError> {
-        invoke_invoke_pattern(&self.automation, hwnd, hint, &self.invoke_find_cache)
+    ///
+    /// `opts` must match the [`EnumOptions`] used for the preceding [`UiaRuntime::enumerate`] call
+    /// so descendant filtering stays consistent with `element_id`.
+    pub fn invoke(
+        &self,
+        hwnd: UiaHwnd,
+        hint: &Hint,
+        opts: &EnumOptions,
+    ) -> Result<(), UiaError> {
+        let find_cond = self.find_descendants_condition(opts)?;
+        invoke_invoke_pattern(
+            &self.automation,
+            hwnd,
+            hint,
+            &self.invoke_find_cache,
+            &find_cond,
+        )
     }
 }
 

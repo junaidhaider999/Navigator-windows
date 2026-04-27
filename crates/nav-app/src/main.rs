@@ -229,7 +229,7 @@ fn main() -> std::process::ExitCode {
                         let _ = renderer.hide(sid);
                         active_show_id = None;
                         if let (Some(hwnd), Some(h)) = (hwnd, hint) {
-                            if let Err(e) = uia.invoke(hwnd, &h) {
+                            if let Err(e) = uia.invoke(hwnd, &h, &enum_opts) {
                                 eprintln!("[uia] invoke: {e}");
                             }
                         }

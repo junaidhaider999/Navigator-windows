@@ -19,14 +19,14 @@ use windows::Win32::UI::Accessibility::{
 use windows::core::{BSTR, Error as WinError};
 
 use crate::UiaError;
-use crate::cache::create_enumeration_cache_request;
+use crate::cache::{create_enumeration_cache_request, create_invoke_targets_find_condition};
 use crate::coords::rect_from_uia_bounds;
 use crate::hwnd::UiaHwnd;
 use crate::options::EnumOptions;
 use crate::pattern::{has_invoke_pattern_cached, has_invoke_pattern_current};
 
 /// Descendant count at or above which we consider splitting root children across a pool (D3).
-const PARALLEL_DESCENDANT_MIN: i32 = 256;
+const PARALLEL_DESCENDANT_MIN: i32 = 512;
 /// Need at least this many distinct native HWND subtrees to pay for Rayon + per-thread COM.
 const MIN_PARALLEL_HWND_SUBTREES: usize = 2;
 
@@ -42,13 +42,13 @@ fn is_pattern_cache_build_failure(err: &WinError) -> bool {
 fn descendants_cached_or_uncached(
     el: &IUIAutomationElement,
     scope: TreeScope,
-    true_cond: &IUIAutomationCondition,
+    find_cond: &IUIAutomationCondition,
     cache: &IUIAutomationCacheRequest,
 ) -> Result<(IUIAutomationElementArray, bool), UiaError> {
-    match unsafe { el.FindAllBuildCache(scope, true_cond, cache) } {
+    match unsafe { el.FindAllBuildCache(scope, find_cond, cache) } {
         Ok(a) => Ok((a, true)),
         Err(e) if is_pattern_cache_build_failure(&e) => {
-            let a = unsafe { el.FindAll(scope, true_cond) }.map_err(|e2| {
+            let a = unsafe { el.FindAll(scope, find_cond) }.map_err(|e2| {
                 UiaError::Operation(format!("FindAllBuildCache: {e}; FindAll fallback: {e2}"))
             })?;
             Ok((a, false))
@@ -58,11 +58,15 @@ fn descendants_cached_or_uncached(
 }
 
 /// Cached enumeration: `FindAllBuildCache` + invoke / bounds / enabled filters.
+///
+/// `find_descendants_cond` is used for `TreeScope_Descendants` (provider-side pruning). Child
+/// lists for HWND splitting still use a true condition so indices match native child order.
 pub fn enumerate_baseline(
     automation: &IUIAutomation,
     hwnd: UiaHwnd,
     opts: &EnumOptions,
     cache: &IUIAutomationCacheRequest,
+    find_descendants_cond: &IUIAutomationCondition,
 ) -> Result<Vec<RawHint>, UiaError> {
     if hwnd.is_invalid() {
         return Ok(Vec::new());
@@ -74,8 +78,12 @@ pub fn enumerate_baseline(
     let true_cond = unsafe { automation.CreateTrueCondition() }
         .map_err(|e| UiaError::Operation(e.to_string()))?;
 
-    let (all, root_cached) =
-        descendants_cached_or_uncached(&root, TreeScope_Descendants, &true_cond, cache)?;
+    let (all, root_cached) = descendants_cached_or_uncached(
+        &root,
+        TreeScope_Descendants,
+        find_descendants_cond,
+        cache,
+    )?;
 
     let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
 
@@ -146,8 +154,12 @@ pub fn enumerate_baseline(
 
     for &j in &no_hwnd_indices {
         let el = unsafe { kids.GetElement(j) }.map_err(|e| UiaError::Operation(e.to_string()))?;
-        let (sub, sub_cached) =
-            descendants_cached_or_uncached(&el, TreeScope_Descendants, &true_cond, cache)?;
+        let (sub, sub_cached) = descendants_cached_or_uncached(
+            &el,
+            TreeScope_Descendants,
+            find_descendants_cond,
+            cache,
+        )?;
         merged.append(&mut collect_from_descendants_array(
             &sub,
             opts,
@@ -338,10 +350,13 @@ fn enumerate_hwnd_subtree_parallel(
         }
         let root = unsafe { automation.ElementFromHandle(sub) }
             .map_err(|e| UiaError::Operation(e.to_string()))?;
-        let true_cond = unsafe { automation.CreateTrueCondition() }
-            .map_err(|e| UiaError::Operation(e.to_string()))?;
+        let find_cond = match create_invoke_targets_find_condition(automation, opts) {
+            Ok(c) => c,
+            Err(_) => unsafe { automation.CreateTrueCondition() }
+                .map_err(|e| UiaError::Operation(e.to_string()))?,
+        };
         let (all, cached) =
-            descendants_cached_or_uncached(&root, TreeScope_Descendants, &true_cond, cache)?;
+            descendants_cached_or_uncached(&root, TreeScope_Descendants, &find_cond, cache)?;
         collect_from_descendants_array(&all, opts, Some(sub), None, cached)
     })
 }

@@ -44,7 +44,12 @@ impl UiaRuntime {
         Err(UiaError::UnsupportedPlatform)
     }
 
-    pub fn invoke(&self, _hwnd: UiaHwnd, _hint: &Hint) -> Result<(), UiaError> {
+    pub fn invoke(
+        &self,
+        _hwnd: UiaHwnd,
+        _hint: &Hint,
+        _opts: &EnumOptions,
+    ) -> Result<(), UiaError> {
         Err(UiaError::UnsupportedPlatform)
     }
 }

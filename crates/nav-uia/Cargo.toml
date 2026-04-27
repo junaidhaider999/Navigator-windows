@@ -15,5 +15,7 @@ rayon = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
     "Win32_UI_Accessibility",
 ] }

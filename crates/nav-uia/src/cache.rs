@@ -1,12 +1,72 @@
 //! [`IUIAutomationCacheRequest`] builders: fast enumeration vs invoke-time `FindAllBuildCache`.
+//! Also builds **FindAll** conditions that match [`crate::options::EnumOptions`] so the provider
+//! walks fewer nodes than `CreateTrueCondition()`.
 
+use std::mem::ManuallyDrop;
+
+use windows::Win32::Foundation::{VARIANT_FALSE, VARIANT_TRUE};
+use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BOOL};
 use windows::Win32::UI::Accessibility::{
     AutomationElementMode_Full, AutomationElementMode_None, IUIAutomation,
-    IUIAutomationCacheRequest, TreeScope_Element, UIA_BoundingRectanglePropertyId,
-    UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsOffscreenPropertyId, UIA_NamePropertyId,
+    IUIAutomationCacheRequest, IUIAutomationCondition, TreeScope_Element,
+    UIA_BoundingRectanglePropertyId, UIA_IsEnabledPropertyId,
+    UIA_IsInvokePatternAvailablePropertyId, UIA_IsOffscreenPropertyId, UIA_InvokePatternId,
+    UIA_NamePropertyId,
 };
 
 use crate::UiaError;
+use crate::options::EnumOptions;
+
+fn variant_bool(vt_bool: windows::Win32::Foundation::VARIANT_BOOL) -> VARIANT {
+    VARIANT {
+        Anonymous: VARIANT_0 {
+            Anonymous: ManuallyDrop::new(VARIANT_0_0 {
+                vt: VT_BOOL,
+                wReserved1: 0,
+                wReserved2: 0,
+                wReserved3: 0,
+                Anonymous: VARIANT_0_0_0 { boolVal: vt_bool },
+            }),
+        },
+    }
+}
+
+/// `FindAll` / `FindAllBuildCache` condition for **descendants**: invoke pattern available, plus
+/// enabled / on-screen filters implied by `opts`. Falls back to [`CreateTrueCondition`](IUIAutomation::CreateTrueCondition)
+/// if building compound conditions fails (rare).
+pub fn create_invoke_targets_find_condition(
+    automation: &IUIAutomation,
+    opts: &EnumOptions,
+) -> Result<IUIAutomationCondition, UiaError> {
+    unsafe {
+        let v_true = variant_bool(VARIANT_TRUE);
+        let v_false = variant_bool(VARIANT_FALSE);
+
+        let mut acc: IUIAutomationCondition = automation
+            .CreatePropertyCondition(UIA_IsInvokePatternAvailablePropertyId, &v_true)
+            .map_err(|e| UiaError::Operation(format!("CreatePropertyCondition IsInvokeAvailable: {e}")))?;
+
+        if !opts.include_disabled {
+            let c = automation
+                .CreatePropertyCondition(UIA_IsEnabledPropertyId, &v_true)
+                .map_err(|e| UiaError::Operation(format!("CreatePropertyCondition IsEnabled: {e}")))?;
+            acc = automation
+                .CreateAndCondition(&acc, &c)
+                .map_err(|e| UiaError::Operation(format!("CreateAndCondition (enabled): {e}")))?;
+        }
+
+        if !opts.include_offscreen {
+            let c = automation
+                .CreatePropertyCondition(UIA_IsOffscreenPropertyId, &v_false)
+                .map_err(|e| UiaError::Operation(format!("CreatePropertyCondition IsOffscreen: {e}")))?;
+            acc = automation
+                .CreateAndCondition(&acc, &c)
+                .map_err(|e| UiaError::Operation(format!("CreateAndCondition (offscreen): {e}")))?;
+        }
+
+        Ok(acc)
+    }
+}
 
 /// Cache request for [`IUIAutomationElement::FindAllBuildCache`] during **enumeration**.
 ///
