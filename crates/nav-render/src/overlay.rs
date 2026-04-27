@@ -1,8 +1,6 @@
 //! Layered popup covering the primary monitor (C2: D2D + DirectComposition).
 
-use std::time::Duration;
-
-use crossbeam_channel::{Receiver, select, tick};
+use crossbeam_channel::Receiver;
 use nav_core::Hint;
 use windows::Win32::Foundation::{
     COLORREF, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, RPC_E_CHANGED_MODE, WPARAM,
@@ -64,7 +62,6 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
         return;
     }
 
-    let ticker = tick(Duration::from_millis(32));
     let mut hwnd: Option<HWND> = None;
     let mut visible = false;
     let mut instance: Option<HINSTANCE> = None;
@@ -73,80 +70,79 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
     let mut max_show_accepted: u64 = 0;
     // Session id currently shown on the swap chain, if any.
     let mut displayed_session: Option<u64> = None;
-    let mut pending_hints: Vec<Hint> = Vec::new();
 
-    'outer: loop {
-        select! {
-            recv(cmd_rx) -> cmd => {
-                match cmd {
-                    Ok(RenderCmd::Prewarm) => {
-                        match unsafe { prewarm_overlay(&mut hwnd, &mut instance, &mut gpu, &mut visible) }
-                        {
-                            Ok(()) => {}
-                            Err(e) => eprintln!("[render] prewarm failed: {e}"),
-                        }
-                    }
-                    Ok(RenderCmd::Show { session_id, hints }) => {
-                        if session_id <= max_show_accepted {
-                            continue;
-                        }
-                        match unsafe {
-                            show_overlay(
-                                &mut hwnd,
-                                &mut instance,
-                                &mut gpu,
-                                &mut visible,
-                                &hints,
-                            )
-                        } {
-                            Ok(()) => {
-                                max_show_accepted = session_id;
-                                displayed_session = Some(session_id);
-                                pending_hints = hints;
-                            }
-                            Err(e) => eprintln!("[render] show failed: {e}"),
-                        }
-                    }
-                    Ok(RenderCmd::Repaint { session_id, hints }) => {
-                        if displayed_session != Some(session_id) {
-                            continue;
-                        }
-                        pending_hints = hints;
-                    }
-                    Ok(RenderCmd::Hide { session_id }) => {
-                        if displayed_session != Some(session_id) {
-                            continue;
-                        }
-                        unsafe { hide_overlay(&mut hwnd, &mut gpu, &mut visible, &mut displayed_session) };
-                    }
-                    Ok(RenderCmd::Shutdown) | Err(_) => {
-                        unsafe { hide_overlay(&mut hwnd, &mut gpu, &mut visible, &mut displayed_session) };
-                        drop(gpu.take());
-                        if let (Some(h), Some(inst)) = (hwnd.take(), instance.take()) {
-                            unsafe {
-                                let _ = DestroyWindow(h);
-                            }
-                            pump_all_thread_messages();
-                            unsafe {
-                                let _ = UnregisterClassW(CLASS_NAME, Some(inst));
-                            }
-                        }
-                        break 'outer;
-                    }
+    loop {
+        let cmd = match cmd_rx.recv() {
+            Ok(c) => c,
+            Err(_) => RenderCmd::Shutdown,
+        };
+
+        match cmd {
+            RenderCmd::Prewarm => {
+                match unsafe { prewarm_overlay(&mut hwnd, &mut instance, &mut gpu, &mut visible) } {
+                    Ok(()) => {}
+                    Err(e) => eprintln!("[render] prewarm failed: {e}"),
                 }
             }
-            recv(ticker) -> _ => {
-                if let Some(h) = hwnd {
-                    unsafe { pump_messages(h) };
-                    if visible {
-                        if let Some(ref mut g) = gpu {
-                            if let Err(e) = unsafe { g.update_and_present(&pending_hints) } {
-                                eprintln!("[render] frame: {e}");
-                            }
+            RenderCmd::Show { session_id, hints } => {
+                if session_id <= max_show_accepted {
+                    if let Some(h) = hwnd {
+                        unsafe { pump_messages(h) };
+                    }
+                    continue;
+                }
+                match unsafe {
+                    show_overlay(&mut hwnd, &mut instance, &mut gpu, &mut visible, &hints)
+                } {
+                    Ok(()) => {
+                        max_show_accepted = session_id;
+                        displayed_session = Some(session_id);
+                    }
+                    Err(e) => eprintln!("[render] show failed: {e}"),
+                }
+            }
+            RenderCmd::Repaint { session_id, hints } => {
+                if displayed_session != Some(session_id) {
+                    if let Some(h) = hwnd {
+                        unsafe { pump_messages(h) };
+                    }
+                    continue;
+                }
+                if visible {
+                    if let Some(ref mut g) = gpu {
+                        if let Err(e) = unsafe { g.update_and_present(&hints) } {
+                            eprintln!("[render] repaint: {e}");
                         }
                     }
                 }
             }
+            RenderCmd::Hide { session_id } => {
+                if displayed_session != Some(session_id) {
+                    if let Some(h) = hwnd {
+                        unsafe { pump_messages(h) };
+                    }
+                    continue;
+                }
+                unsafe { hide_overlay(&mut hwnd, &mut gpu, &mut visible, &mut displayed_session) };
+            }
+            RenderCmd::Shutdown => {
+                unsafe { hide_overlay(&mut hwnd, &mut gpu, &mut visible, &mut displayed_session) };
+                drop(gpu.take());
+                if let (Some(h), Some(inst)) = (hwnd.take(), instance.take()) {
+                    unsafe {
+                        let _ = DestroyWindow(h);
+                    }
+                    pump_all_thread_messages();
+                    unsafe {
+                        let _ = UnregisterClassW(CLASS_NAME, Some(inst));
+                    }
+                }
+                break;
+            }
+        }
+
+        if let Some(h) = hwnd {
+            unsafe { pump_messages(h) };
         }
     }
 

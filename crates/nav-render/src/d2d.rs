@@ -4,16 +4,16 @@ use std::time::{Duration, Instant};
 
 use nav_core::Hint;
 use tracing::debug;
-use windows::Win32::Foundation::{HMODULE, HWND, RECT};
+use windows::Win32::Foundation::{BOOL, HMODULE, HWND, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_ANTIALIAS_MODE_ALIASED, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET,
-    D2D1_BITMAP_PROPERTIES1, D2D1_CAP_STYLE_FLAT, D2D1_DASH_STYLE_SOLID,
-    D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_LINE_JOIN_MITER,
-    D2D1_STROKE_STYLE_PROPERTIES1, D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext,
-    ID2D1Factory1, ID2D1StrokeStyle1,
+    D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
+    D2D1_CAP_STYLE_FLAT, D2D1_DASH_STYLE_SOLID, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_LINE_JOIN_MITER, D2D1_STROKE_STYLE_PROPERTIES1,
+    D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1, ID2D1SolidColorBrush,
+    ID2D1StrokeStyle1,
 };
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D11::{
@@ -33,16 +33,18 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::IDXGIAdapter;
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT, DXGI_SCALING_STRETCH,
-    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD,
-    DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
+    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+    DXGI_PRESENT, DXGI_PRESENT_ALLOW_TEARING, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
+    DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING, DXGI_SWAP_EFFECT_FLIP_DISCARD,
+    DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGIFactory5, IDXGISurface,
+    IDXGISwapChain1,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
 use windows::core::{Interface, w};
 
 use crate::RenderError;
-use crate::scene::{self, PaintPlan, PillGeom};
+use crate::scene::{self, PillGeom};
 
 const FRAME_BUDGET: Duration = Duration::from_millis(4);
 
@@ -64,6 +66,13 @@ pub struct D2dCompositionRenderer {
     write: IDWriteFactory,
     text_format: IDWriteTextFormat,
     stroke: ID2D1StrokeStyle1,
+    pill_fill: ID2D1SolidColorBrush,
+    pill_border: ID2D1SolidColorBrush,
+    pill_text: ID2D1SolidColorBrush,
+    /// `Present(0, ALLOW_TEARING)` is only valid when the swap chain was created with
+    /// [`DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING`] after a successful factory check.
+    present_allow_tearing: bool,
+    swap_chain_flags: DXGI_SWAP_CHAIN_FLAG,
     last_pills: Vec<PillGeom>,
 }
 
@@ -100,6 +109,24 @@ impl D2dCompositionRenderer {
         let dxgi_factory: IDXGIFactory2 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))
             .map_err(|e| RenderError::Win32(e.to_string()))?;
 
+        let mut present_allow_tearing = false;
+        if let Ok(factory5) = dxgi_factory.cast::<IDXGIFactory5>() {
+            let mut allow = BOOL(0);
+            let hr = factory5.CheckFeatureSupport(
+                DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+                &mut allow as *mut BOOL as *mut std::ffi::c_void,
+                std::mem::size_of::<BOOL>() as u32,
+            );
+            if hr.is_ok() {
+                present_allow_tearing = allow.as_bool();
+            }
+        }
+        let swap_chain_flags = if present_allow_tearing {
+            DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+        } else {
+            DXGI_SWAP_CHAIN_FLAG(0)
+        };
+
         let d2d_factory: ID2D1Factory1 = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)
             .map_err(|e| RenderError::Win32(e.to_string()))?;
         let d2d_device = d2d_factory
@@ -131,10 +158,7 @@ impl D2dCompositionRenderer {
                 Scaling: DXGI_SCALING_STRETCH,
                 SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
                 AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
-                // `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` requires
-                // `IDXGIFactory5::CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING)` first;
-                // using it unconditionally yields `DXGI_ERROR_INVALID_CALL` on many drivers.
-                Flags: 0,
+                Flags: swap_chain_flags.0 as u32,
             };
             // `CreateSwapChainForHwnd` + layered `WS_POPUP` often returns `DXGI_ERROR_INVALID_CALL`
             // (flip model is tied to the HWND presentation path). Composition swap chains are
@@ -197,6 +221,16 @@ impl D2dCompositionRenderer {
 
         d2d_ctx.SetDpi(dpi, dpi);
 
+        let pill_fill = d2d_ctx
+            .CreateSolidColorBrush(&scene::pill_fill_color(), None)
+            .map_err(|e| RenderError::Win32(e.to_string()))?;
+        let pill_border = d2d_ctx
+            .CreateSolidColorBrush(&scene::pill_border_color(), None)
+            .map_err(|e| RenderError::Win32(e.to_string()))?;
+        let pill_text = d2d_ctx
+            .CreateSolidColorBrush(&scene::pill_text_color(), None)
+            .map_err(|e| RenderError::Win32(e.to_string()))?;
+
         let origin = window_origin_phys(hwnd)?;
         let last_pills = scene::pills_for_frame(
             &[],
@@ -222,6 +256,11 @@ impl D2dCompositionRenderer {
             write,
             text_format,
             stroke,
+            pill_fill,
+            pill_border,
+            pill_text,
+            present_allow_tearing,
+            swap_chain_flags,
             last_pills,
         })
     }
@@ -248,13 +287,7 @@ impl D2dCompositionRenderer {
         self.d2d_ctx.SetDpi(dpi, dpi);
 
         self.swap_chain
-            .ResizeBuffers(
-                2,
-                nw,
-                nh,
-                DXGI_FORMAT_B8G8R8A8_UNORM,
-                DXGI_SWAP_CHAIN_FLAG(0),
-            )
+            .ResizeBuffers(2, nw, nh, DXGI_FORMAT_B8G8R8A8_UNORM, self.swap_chain_flags)
             .map_err(|e| RenderError::Win32(e.to_string()))?;
 
         let origin = window_origin_phys(self.hwnd)?;
@@ -280,8 +313,10 @@ impl D2dCompositionRenderer {
         let ch = client_h_dips(self.pixel_h, self.dpi);
         let origin = window_origin_phys(self.hwnd)?;
         let new_pills = scene::pills_for_frame(hints, origin, cw, ch, self.dpi);
-        let plan = scene::paint_plan(&self.last_pills, &new_pills, cw, ch);
-        if matches!(plan, PaintPlan::NoOp) {
+        if matches!(
+            scene::paint_plan(&self.last_pills, &new_pills, cw, ch),
+            scene::PaintPlan::NoOp
+        ) {
             self.last_pills = new_pills;
             return Ok(t0.elapsed());
         }
@@ -317,56 +352,17 @@ impl D2dCompositionRenderer {
             a: 0.0,
         };
 
-        let fill = self
-            .d2d_ctx
-            .CreateSolidColorBrush(&scene::pill_fill_color(), None)
-            .map_err(|e| RenderError::Win32(e.to_string()))?;
-        let border = self
-            .d2d_ctx
-            .CreateSolidColorBrush(&scene::pill_border_color(), None)
-            .map_err(|e| RenderError::Win32(e.to_string()))?;
-        let text_brush = self
-            .d2d_ctx
-            .CreateSolidColorBrush(&scene::pill_text_color(), None)
-            .map_err(|e| RenderError::Win32(e.to_string()))?;
-
-        match plan {
-            PaintPlan::Full => {
-                self.d2d_ctx.Clear(Some(&clear));
-                scene::draw_pills(
-                    &self.d2d_ctx,
-                    &self.text_format,
-                    &self.write,
-                    &new_pills,
-                    &fill,
-                    &border,
-                    &text_brush,
-                    &self.stroke,
-                )?;
-            }
-            PaintPlan::Partial { clip_dips } => {
-                self.d2d_ctx
-                    .PushAxisAlignedClip(&clip_dips, D2D1_ANTIALIAS_MODE_ALIASED);
-                let clear_brush = self
-                    .d2d_ctx
-                    .CreateSolidColorBrush(&clear, None)
-                    .map_err(|e| RenderError::Win32(e.to_string()))?;
-                self.d2d_ctx.FillRectangle(&clip_dips, &clear_brush);
-                let subset = scene::pills_for_partial_repaint(&new_pills, &clip_dips);
-                scene::draw_pills(
-                    &self.d2d_ctx,
-                    &self.text_format,
-                    &self.write,
-                    &subset,
-                    &fill,
-                    &border,
-                    &text_brush,
-                    &self.stroke,
-                )?;
-                self.d2d_ctx.PopAxisAlignedClip();
-            }
-            PaintPlan::NoOp => unreachable!("NoOp handled before BeginDraw"),
-        }
+        self.d2d_ctx.Clear(Some(&clear));
+        scene::draw_pills(
+            &self.d2d_ctx,
+            &self.text_format,
+            &self.write,
+            &new_pills,
+            &self.pill_fill,
+            &self.pill_border,
+            &self.pill_text,
+            &self.stroke,
+        )?;
 
         self.last_pills = new_pills;
 
@@ -392,11 +388,18 @@ impl D2dCompositionRenderer {
     }
 
     unsafe fn present_frame(&self) -> Result<(), RenderError> {
-        // Sync interval 1: valid without `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` (unlike interval 0).
-        self.swap_chain
-            .Present(1, DXGI_PRESENT(0))
-            .ok()
-            .map_err(|e| RenderError::Win32(e.to_string()))?;
+        if self.present_allow_tearing {
+            self.swap_chain
+                .Present(0, DXGI_PRESENT_ALLOW_TEARING)
+                .ok()
+                .map_err(|e| RenderError::Win32(e.to_string()))?;
+        } else {
+            // Without tearing, interval 0 + no tearing flag is invalid on flip-model swap chains.
+            self.swap_chain
+                .Present(1, DXGI_PRESENT(0))
+                .ok()
+                .map_err(|e| RenderError::Win32(e.to_string()))?;
+        }
         Ok(())
     }
 }
