@@ -1,24 +1,26 @@
-//! Invoke pattern dispatch: re-resolve the same `FindAllBuildCache` index as enumeration (D1).
-//!
-//! Enumeration uses `AutomationElementMode_None` for speed. Invoke repeats `FindAllBuildCache`
-//! with a **Full**-mode cache (`create_invoke_findall_cache_request`) so `GetElement` yields a
-//! real element for `GetCachedPattern` / `GetCurrentPattern` / `Invoke`.
+//! UIA dispatch: re-resolve the same `FindAllBuildCache` index as enumeration, then invoke pattern,
+//! toggle, selection, expand/collapse, legacy default action, or physical click fallback.
 
 use core::ffi::c_void;
 
-use nav_core::Hint;
+use nav_core::{ElementKind, Hint};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Accessibility::{
-    IUIAutomation, IUIAutomationCacheRequest, IUIAutomationCondition, IUIAutomationElement,
-    IUIAutomationInvokePattern, TreeScope_Children, TreeScope_Descendants, UIA_InvokePatternId,
+    ExpandCollapseState_Collapsed, ExpandCollapseState_LeafNode,
+    ExpandCollapseState_PartiallyExpanded, IUIAutomation,
+    IUIAutomationCacheRequest, IUIAutomationCondition, IUIAutomationElement,
+    IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern, IUIAutomationLegacyIAccessiblePattern,
+    IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern, TreeScope_Children,
+    TreeScope_Descendants, UIA_ExpandCollapsePatternId, UIA_InvokePatternId,
+    UIA_LegacyIAccessiblePatternId, UIA_SelectionItemPatternId, UIA_TogglePatternId,
 };
 use windows::core::Interface;
 
 use crate::UiaError;
+use crate::click::left_click_rect_center;
 use crate::hwnd::UiaHwnd;
 
-/// Invokes the element identified by [`Hint::raw`](nav_core::RawHint) (`element_id` + optional
-/// `uia_invoke_hwnd` / `uia_child_index` scoping).
+/// Resolves the enumerated element and performs the interaction implied by [`Hint::raw.kind`](nav_core::RawHint).
 pub fn invoke_invoke_pattern(
     automation: &IUIAutomation,
     hwnd: UiaHwnd,
@@ -82,18 +84,7 @@ pub fn invoke_invoke_pattern(
         unsafe { all.GetElement(idx) }.map_err(|e| UiaError::Operation(e.to_string()))?
     };
 
-    let pat = match unsafe { el.GetCachedPattern(UIA_InvokePatternId) } {
-        Ok(p) => p,
-        Err(e1) => unsafe { el.GetCurrentPattern(UIA_InvokePatternId) }.map_err(|e2| {
-            UiaError::Operation(format!(
-                "Invoke pattern GetCachedPattern: {e1}; GetCurrentPattern: {e2}"
-            ))
-        })?,
-    };
-    let invoke: IUIAutomationInvokePattern =
-        pat.cast().map_err(|e| UiaError::Operation(e.to_string()))?;
-    unsafe { invoke.Invoke() }.map_err(|e| UiaError::Operation(e.to_string()))?;
-    Ok(())
+    dispatch_on_element(&el, hint)
 }
 
 fn bounds_check(idx: i32, len: i32) -> Result<(), UiaError> {
@@ -101,6 +92,81 @@ fn bounds_check(idx: i32, len: i32) -> Result<(), UiaError> {
         return Err(UiaError::Operation(format!(
             "invoke index {idx} out of bounds (len={len})"
         )));
+    }
+    Ok(())
+}
+
+fn pattern_cached_or_current(
+    el: &IUIAutomationElement,
+    id: windows::Win32::UI::Accessibility::UIA_PATTERN_ID,
+) -> Result<windows::core::IUnknown, UiaError> {
+    match unsafe { el.GetCachedPattern(id) } {
+        Ok(p) => Ok(p),
+        Err(e1) => unsafe { el.GetCurrentPattern(id) }.map_err(|e2| {
+            UiaError::Operation(format!(
+                "GetCachedPattern: {e1}; GetCurrentPattern: {e2}"
+            ))
+        }),
+    }
+}
+
+fn dispatch_on_element(el: &IUIAutomationElement, hint: &Hint) -> Result<(), UiaError> {
+    match hint.raw.kind {
+        ElementKind::Invoke => {
+            let pat = pattern_cached_or_current(el, UIA_InvokePatternId)?;
+            let invoke: IUIAutomationInvokePattern =
+                pat.cast().map_err(|e| UiaError::Operation(e.to_string()))?;
+            unsafe { invoke.Invoke() }.map_err(|e| UiaError::Operation(e.to_string()))?;
+        }
+        ElementKind::Toggle => {
+            let pat = pattern_cached_or_current(el, UIA_TogglePatternId)?;
+            let p: IUIAutomationTogglePattern =
+                pat.cast().map_err(|e| UiaError::Operation(e.to_string()))?;
+            unsafe { p.Toggle() }.map_err(|e| UiaError::Operation(e.to_string()))?;
+        }
+        ElementKind::Select => {
+            let pat = pattern_cached_or_current(el, UIA_SelectionItemPatternId)?;
+            let p: IUIAutomationSelectionItemPattern =
+                pat.cast().map_err(|e| UiaError::Operation(e.to_string()))?;
+            unsafe { p.Select() }.map_err(|e| UiaError::Operation(e.to_string()))?;
+        }
+        ElementKind::ExpandCollapse => {
+            let pat = pattern_cached_or_current(el, UIA_ExpandCollapsePatternId)?;
+            let p: IUIAutomationExpandCollapsePattern =
+                pat.cast().map_err(|e| UiaError::Operation(e.to_string()))?;
+            let state = unsafe { p.CachedExpandCollapseState() }
+                .or_else(|_| unsafe { p.CurrentExpandCollapseState() })
+                .map_err(|e| UiaError::Operation(e.to_string()))?;
+            if state == ExpandCollapseState_LeafNode {
+                left_click_rect_center(&hint.raw.bounds)?;
+            } else if state == ExpandCollapseState_Collapsed
+                || state == ExpandCollapseState_PartiallyExpanded
+            {
+                unsafe { p.Expand() }.map_err(|e| UiaError::Operation(e.to_string()))?;
+            } else {
+                unsafe { p.Collapse() }.map_err(|e| UiaError::Operation(e.to_string()))?;
+            }
+        }
+        ElementKind::GenericClickable => {
+            if let Ok(pat) = pattern_cached_or_current(el, UIA_LegacyIAccessiblePatternId) {
+                if let Ok(leg) = pat.cast::<IUIAutomationLegacyIAccessiblePattern>() {
+                    if unsafe { leg.DoDefaultAction() }.is_ok() {
+                        return Ok(());
+                    }
+                }
+            }
+            left_click_rect_center(&hint.raw.bounds)?;
+        }
+        ElementKind::Editable => {
+            if let Ok(pat) = pattern_cached_or_current(el, UIA_LegacyIAccessiblePatternId) {
+                if let Ok(leg) = pat.cast::<IUIAutomationLegacyIAccessiblePattern>() {
+                    if unsafe { leg.DoDefaultAction() }.is_ok() {
+                        return Ok(());
+                    }
+                }
+            }
+            left_click_rect_center(&hint.raw.bounds)?;
+        }
     }
     Ok(())
 }

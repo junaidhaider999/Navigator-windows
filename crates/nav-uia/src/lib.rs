@@ -14,6 +14,8 @@ pub use options::{EnumOptions, FallbackPolicy};
 #[cfg(windows)]
 mod cache;
 #[cfg(windows)]
+mod click;
+#[cfg(windows)]
 mod coords;
 #[cfg(windows)]
 mod enumerate;

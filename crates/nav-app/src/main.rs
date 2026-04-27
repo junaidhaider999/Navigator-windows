@@ -28,6 +28,9 @@ fn main() -> std::process::ExitCode {
         /// Enable `tracing` to stderr (e.g. trace, debug, info, warn, error).
         #[arg(long, value_name = "LEVEL")]
         log: Option<String>,
+        /// Log skipped UIA nodes during enumeration (`[uia-debug]`, stderr).
+        #[arg(long)]
+        debug_uia: bool,
     }
 
     let cli = Cli::parse();
@@ -70,7 +73,10 @@ fn main() -> std::process::ExitCode {
     if let Err(e) = renderer.prewarm() {
         eprintln!("render prewarm: {e}");
     }
-    let enum_opts = EnumOptions::default();
+    let enum_opts = EnumOptions {
+        debug_uia: cli.debug_uia,
+        ..Default::default()
+    };
     let mut overlay_session: u64 = 0;
     let mut active_show_id: Option<u64> = None;
     let mut session: Option<Session> = None;

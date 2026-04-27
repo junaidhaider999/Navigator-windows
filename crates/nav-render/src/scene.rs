@@ -143,7 +143,11 @@ fn pill_rect_candidates(
     ph: f32,
 ) -> Vec<D2D_RECT_F> {
     let o = PILL_OUTSET;
+    // Prefer center-anchored pills (closer to the clickable hotspot than a corner).
+    let cx = el_left + el_w * 0.5 - pw * 0.5;
+    let cy = el_top + el_h * 0.5 - ph * 0.5;
     let corners = [
+        (cx, cy),
         (el_left - o, el_top - o),
         (el_left + el_w - pw + o, el_top - o),
         (el_left - o, el_top + el_h - ph + o),

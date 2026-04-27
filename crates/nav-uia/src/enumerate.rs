@@ -4,9 +4,9 @@ use core::ffi::c_void;
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use nav_core::{Backend, ElementKind, RawHint};
+use nav_core::{Backend, RawHint, Rect};
 use rayon::prelude::*;
-use windows::Win32::Foundation::{HWND, RPC_E_CHANGED_MODE};
+use windows::Win32::Foundation::{HWND, RECT, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     CoUninitialize,
@@ -16,6 +16,7 @@ use windows::Win32::UI::Accessibility::{
     IUIAutomationCondition, IUIAutomationElement, IUIAutomationElementArray, TreeScope,
     TreeScope_Children, TreeScope_Descendants,
 };
+use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 use windows::core::{BSTR, Error as WinError};
 
 use crate::UiaError;
@@ -23,7 +24,7 @@ use crate::cache::{create_enumeration_cache_request, create_invoke_targets_find_
 use crate::coords::rect_from_uia_bounds;
 use crate::hwnd::UiaHwnd;
 use crate::options::EnumOptions;
-use crate::pattern::{has_invoke_pattern_cached, has_invoke_pattern_current};
+use crate::pattern::classify_interaction_kind;
 
 /// Descendant count at or above which we consider splitting root children across a pool (D3).
 const PARALLEL_DESCENDANT_MIN: i32 = 512;
@@ -84,17 +85,17 @@ pub fn enumerate_baseline(
     let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
 
     if !root_cached {
-        return collect_from_descendants_array(&all, opts, None, None, false);
+        return collect_from_descendants_array(&all, opts, hwnd, None, None, false);
     }
 
     if len < PARALLEL_DESCENDANT_MIN {
-        return collect_from_descendants_array(&all, opts, None, None, true);
+        return collect_from_descendants_array(&all, opts, hwnd, None, None, true);
     }
 
     let kids = match unsafe { root.FindAllBuildCache(TreeScope_Children, &true_cond, cache) } {
         Ok(k) => k,
         Err(e) if is_pattern_cache_build_failure(&e) => {
-            return collect_from_descendants_array(&all, opts, None, None, true);
+            return collect_from_descendants_array(&all, opts, hwnd, None, None, true);
         }
         Err(e) => {
             return Err(UiaError::Operation(format!(
@@ -105,7 +106,7 @@ pub fn enumerate_baseline(
     let n_children = unsafe { kids.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
 
     if n_children <= 1 {
-        return collect_from_descendants_array(&all, opts, None, None, true);
+        return collect_from_descendants_array(&all, opts, hwnd, None, None, true);
     }
 
     let mut hwnd_subtrees: Vec<HWND> = Vec::new();
@@ -129,23 +130,25 @@ pub fn enumerate_baseline(
     hwnd_subtrees.retain(|h| *h != hwnd);
 
     if hwnd_subtrees.len() < MIN_PARALLEL_HWND_SUBTREES {
-        return collect_from_descendants_array(&all, opts, None, None, true);
+        return collect_from_descendants_array(&all, opts, hwnd, None, None, true);
     }
 
     let opts_arc = Arc::new(opts.clone());
+    let session_root_bits = hwnd.0 as usize;
     // `HWND` is not `Send` in windows-rs; pass pointer bits for Rayon.
     let hwnd_bits: Vec<usize> = hwnd_subtrees.iter().map(|h| h.0 as usize).collect();
     let parallel: Result<Vec<Vec<RawHint>>, UiaError> = hwnd_bits
         .par_iter()
         .map(|&bits| {
             let sub = HWND(bits as *mut c_void);
-            enumerate_hwnd_subtree_parallel(sub, opts_arc.as_ref())
+            let session_root = HWND(session_root_bits as *mut c_void);
+            enumerate_hwnd_subtree_parallel(sub, opts_arc.as_ref(), session_root)
         })
         .collect();
 
     let mut merged: Vec<RawHint> = match parallel {
         Ok(parts) => parts.into_iter().flatten().collect(),
-        Err(_) => return collect_from_descendants_array(&all, opts, None, None, true),
+        Err(_) => return collect_from_descendants_array(&all, opts, hwnd, None, None, true),
     };
 
     for &j in &no_hwnd_indices {
@@ -159,6 +162,7 @@ pub fn enumerate_baseline(
         merged.append(&mut collect_from_descendants_array(
             &sub,
             opts,
+            hwnd,
             None,
             Some(j as u32),
             sub_cached,
@@ -176,9 +180,26 @@ pub fn enumerate_baseline(
     Ok(merged)
 }
 
+fn rect_center_inside_hwnd(rect: &Rect, root: HWND) -> bool {
+    if root.is_invalid() {
+        return true;
+    }
+    let mut wr = RECT::default();
+    if unsafe { GetWindowRect(root, &mut wr) }.is_err() {
+        return true;
+    }
+    let cx = rect.x + rect.w / 2;
+    let cy = rect.y + rect.h / 2;
+    cx >= wr.left
+        && cx < wr.right
+        && cy >= wr.top
+        && cy < wr.bottom
+}
+
 fn collect_from_descendants_array(
     all: &IUIAutomationElementArray,
     opts: &EnumOptions,
+    session_root: HWND,
     scope_hwnd: Option<HWND>,
     child_index: Option<u32>,
     patterns_from_cache: bool,
@@ -196,14 +217,20 @@ fn collect_from_descendants_array(
             Err(e) => return Err(UiaError::Operation(e.to_string())),
         };
 
-        let has_invoke = if patterns_from_cache {
-            has_invoke_pattern_cached(&el)
-        } else {
-            has_invoke_pattern_current(&el)
+        let kind = match classify_interaction_kind(&el, patterns_from_cache) {
+            Some(k) => k,
+            None => {
+                if opts.debug_uia {
+                    let nm = read_optional_name(&el, patterns_from_cache)
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
+                    eprintln!(
+                        "[uia-debug] skip idx={i} reason=no_interaction name={nm:?}"
+                    );
+                }
+                continue;
+            }
         };
-        if !has_invoke {
-            continue;
-        }
 
         if !opts.include_disabled {
             let enabled = if patterns_from_cache {
@@ -212,8 +239,18 @@ fn collect_from_descendants_array(
                 unsafe { el.CurrentIsEnabled() }
             };
             match enabled {
-                Ok(b) if !b.as_bool() => continue,
-                Err(_) => continue,
+                Ok(b) if !b.as_bool() => {
+                    if opts.debug_uia {
+                        eprintln!("[uia-debug] skip idx={i} reason=disabled");
+                    }
+                    continue;
+                }
+                Err(_) => {
+                    if opts.debug_uia {
+                        eprintln!("[uia-debug] skip idx={i} reason=enabled_err");
+                    }
+                    continue;
+                }
                 _ => {}
             }
         }
@@ -225,7 +262,12 @@ fn collect_from_descendants_array(
                 unsafe { el.CurrentIsOffscreen() }
             };
             match offscreen {
-                Ok(b) if b.as_bool() => continue,
+                Ok(b) if b.as_bool() => {
+                    if opts.debug_uia {
+                        eprintln!("[uia-debug] skip idx={i} reason=offscreen");
+                    }
+                    continue;
+                }
                 Err(_) => {}
                 _ => {}
             }
@@ -239,10 +281,30 @@ fn collect_from_descendants_array(
         let rect = match bounds {
             Ok(r) => match rect_from_uia_bounds(r) {
                 Some(r) => r,
-                None => continue,
+                None => {
+                    if opts.debug_uia {
+                        eprintln!("[uia-debug] skip idx={i} reason=no_or_zero_rect");
+                    }
+                    continue;
+                }
             },
-            Err(_) => continue,
+            Err(_) => {
+                if opts.debug_uia {
+                    eprintln!("[uia-debug] skip idx={i} reason=bounds_err");
+                }
+                continue;
+            }
         };
+
+        if !rect_center_inside_hwnd(&rect, session_root) {
+            if opts.debug_uia {
+                eprintln!(
+                    "[uia-debug] skip idx={i} reason=outside_root_window bounds=({},{} {}x{})",
+                    rect.x, rect.y, rect.w, rect.h
+                );
+            }
+            continue;
+        }
 
         let name = read_optional_name(&el, patterns_from_cache);
 
@@ -255,7 +317,7 @@ fn collect_from_descendants_array(
                 None
             },
             bounds: rect,
-            kind: ElementKind::Invoke,
+            kind,
             name,
             backend: Backend::Uia,
         });
@@ -339,6 +401,7 @@ fn with_parcel_worker<R>(
 fn enumerate_hwnd_subtree_parallel(
     sub: HWND,
     opts: &EnumOptions,
+    session_root: HWND,
 ) -> Result<Vec<RawHint>, UiaError> {
     with_parcel_worker(|automation, cache| {
         if sub.is_invalid() {
@@ -353,6 +416,6 @@ fn enumerate_hwnd_subtree_parallel(
         };
         let (all, cached) =
             descendants_cached_or_uncached(&root, TreeScope_Descendants, &find_cond, cache)?;
-        collect_from_descendants_array(&all, opts, Some(sub), None, cached)
+        collect_from_descendants_array(&all, opts, session_root, Some(sub), None, cached)
     })
 }

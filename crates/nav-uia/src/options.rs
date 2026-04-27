@@ -16,15 +16,18 @@ pub struct EnumOptions {
     pub include_offscreen: bool,
     pub include_disabled: bool,
     pub fallback: FallbackPolicy,
+    /// When true, log each skipped UIA node during enumeration to stderr (`[uia-debug]`).
+    pub debug_uia: bool,
 }
 
 impl Default for EnumOptions {
     fn default() -> Self {
         Self {
-            max_elements: 1024,
+            max_elements: 2048,
             include_offscreen: false,
             include_disabled: false,
             fallback: FallbackPolicy::Auto,
+            debug_uia: false,
         }
     }
 }
