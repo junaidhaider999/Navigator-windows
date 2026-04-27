@@ -266,6 +266,8 @@ The standard target. We are now in shipping range for v1.
 ### E3. Multi-monitor + per-monitor DPI
 
 - **Goal:** correct on a 4K + 1080p mixed setup.
+- **Implemented:** One overlay HWND per monitor; `WM_DISPLAYCHANGE` / `WM_DPICHANGED` enqueue
+  [`RenderCmd::SyncMonitors`](crates/nav-render/src/overlay.rs) to re-enumerate displays, resize D2D, and re-present the last visible frame from cache.
 - **Done when:**
   - Drag the foreground window across monitors, hotkey works, hints show
     on the correct monitor at the correct DPI.
@@ -274,6 +276,8 @@ The standard target. We are now in shipping range for v1.
 
 - **Goal:** a discoverable surface that does not require the user to know
   the binary is running.
+- **Implemented:** `[hotkey].chord` in `nav-config` (default `alt+;`); tray `Reload` applies
+  `InputThread::reregister_hotkey` (message to the input thread’s sink) plus `Renderer::sync_monitors()`.
 - **Done when:**
   - Tray icon present, right-click menu has `Reload config`, `Open config`,
     `About`, `Quit`.

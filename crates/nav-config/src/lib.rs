@@ -23,6 +23,9 @@ pub enum NavConfigError {
 pub struct Config {
     #[serde(default)]
     pub hints: HintsConfig,
+    /// Global activation chord (see `nav-input` / `04-build-order.md` E4).
+    #[serde(default)]
+    pub hotkey: HotkeyConfig,
     #[serde(default)]
     pub log: LogConfig,
     #[serde(default)]
@@ -52,6 +55,25 @@ impl Default for HintsConfig {
         Self {
             alphabet: default_alphabet(),
             max_elements: default_max_elements(),
+        }
+    }
+}
+
+fn default_hotkey_chord() -> String {
+    "alt+;".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HotkeyConfig {
+    /// e.g. `alt+;`, `ctrl+shift+a` (parsed by `nav-input`).
+    #[serde(default = "default_hotkey_chord")]
+    pub chord: String,
+}
+
+impl Default for HotkeyConfig {
+    fn default() -> Self {
+        Self {
+            chord: default_hotkey_chord(),
         }
     }
 }
@@ -214,6 +236,7 @@ mod tests {
         let def = Config::default();
         assert_eq!(parsed.hints.alphabet, def.hints.alphabet);
         assert_eq!(parsed.hints.max_elements, def.hints.max_elements);
+        assert_eq!(parsed.hotkey.chord, def.hotkey.chord);
         assert_eq!(parsed.fallback.budget_ms.uia, def.fallback.budget_ms.uia);
     }
 }

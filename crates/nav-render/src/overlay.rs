@@ -1,6 +1,8 @@
 //! Layered popups: one borderless topmost window per display (C2: D2D + DirectComposition).
 
-use crossbeam_channel::Receiver;
+use std::sync::OnceLock;
+
+use crossbeam_channel::{Receiver, Sender};
 use nav_core::{Hint, UiaDebugReject};
 use windows::Win32::Foundation::{
     COLORREF, ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT,
@@ -12,9 +14,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     HWND_TOPMOST, LWA_ALPHA, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassExW,
     SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SetLayeredWindowAttributes, SetWindowPos, ShowWindow,
-    TranslateMessage, UnregisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DESTROY, WNDCLASS_STYLES,
-    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    TranslateMessage, UnregisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
@@ -43,7 +45,23 @@ pub(crate) enum RenderCmd {
     Hide {
         session_id: u64,
     },
+    /// Re-enumerate monitors, resize per-HWND D2D, and re-present the last frame if a session is visible.
+    SyncMonitors,
     Shutdown,
+}
+
+static RENDER_CMD_TX: OnceLock<Sender<RenderCmd>> = OnceLock::new();
+
+/// Set once from [`crate::Renderer::spawn`](crate::Renderer::spawn) so overlay `WNDCLASS` procs
+/// can request a monitor / DPI resync.
+pub(crate) fn set_render_command_sender(tx: Sender<RenderCmd>) {
+    let _ = RENDER_CMD_TX.set(tx);
+}
+
+fn post_sync_monitors() {
+    if let Some(tx) = RENDER_CMD_TX.get() {
+        let _ = tx.send(RenderCmd::SyncMonitors);
+    }
 }
 
 unsafe extern "system" fn overlay_wndproc(
@@ -53,6 +71,16 @@ unsafe extern "system" fn overlay_wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_DPICHANGED => {
+            let r = DefWindowProcW(hwnd, msg, wparam, lparam);
+            post_sync_monitors();
+            r
+        }
+        WM_DISPLAYCHANGE => {
+            let r = DefWindowProcW(hwnd, msg, wparam, lparam);
+            post_sync_monitors();
+            r
+        }
         WM_DESTROY => {
             PostQuitMessage(0);
             LRESULT(0)
@@ -232,6 +260,41 @@ fn partition_debug_rejects(
     out
 }
 
+struct LastPainted {
+    session_id: u64,
+    hints: Vec<Hint>,
+    debug_rejects: Vec<UiaDebugReject>,
+    debug_connectors: bool,
+}
+
+unsafe fn present_partitioned(
+    st: &mut OverlayStack,
+    hints: &[Hint],
+    debug_rejects: &[UiaDebugReject],
+    debug_connectors: bool,
+) -> Result<(), RenderError> {
+    st.sync_to_monitors()?;
+    if st.slots.is_empty() {
+        return Err(RenderError::Win32("no overlay slots after sync".into()));
+    }
+    let monitors: Vec<RECT> = st.slots.iter().map(|s| s.monitor).collect();
+    let parts = partition_hints(hints, &monitors);
+    let dbg_parts = partition_debug_rejects(debug_rejects, &monitors);
+    for ((s, part), dpart) in st.slots.iter_mut().zip(parts.iter()).zip(dbg_parts.iter()) {
+        if let Some(ref mut g) = s.gpu {
+            g.update_and_present(part, dpart, debug_connectors)?;
+        }
+        if part.is_empty() && dpart.is_empty() {
+            let _ = ShowWindow(s.hwnd, SW_HIDE);
+            s.visible = false;
+        } else {
+            let _ = ShowWindow(s.hwnd, SW_SHOW);
+            s.visible = true;
+        }
+    }
+    Ok(())
+}
+
 pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
     let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     if hr.is_err() && hr != RPC_E_CHANGED_MODE {
@@ -242,6 +305,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
     let mut stack: Option<OverlayStack> = None;
     let mut max_show_accepted: u64 = 0;
     let mut displayed_session: Option<u64> = None;
+    let mut last_painted: Option<LastPainted> = None;
 
     loop {
         let cmd = match cmd_rx.recv() {
@@ -288,33 +352,18 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                         stack = Some(OverlayStack::new()?);
                     }
                     let st = stack.as_mut().unwrap();
-                    st.sync_to_monitors()?;
-                    if st.slots.is_empty() {
-                        return Err(RenderError::Win32("no overlay slots after sync".into()));
-                    }
-                    let monitors: Vec<RECT> = st.slots.iter().map(|s| s.monitor).collect();
-                    let parts = partition_hints(&hints, &monitors);
-                    let dbg_parts = partition_debug_rejects(&debug_rejects, &monitors);
-                    for ((s, part), dpart) in
-                        st.slots.iter_mut().zip(parts.iter()).zip(dbg_parts.iter())
-                    {
-                        if let Some(ref mut g) = s.gpu {
-                            g.update_and_present(part, dpart, debug_connectors)?;
-                        }
-                        if part.is_empty() && dpart.is_empty() {
-                            let _ = ShowWindow(s.hwnd, SW_HIDE);
-                            s.visible = false;
-                        } else {
-                            let _ = ShowWindow(s.hwnd, SW_SHOW);
-                            s.visible = true;
-                        }
-                    }
-                    Ok::<(), RenderError>(())
+                    present_partitioned(st, &hints, &debug_rejects, debug_connectors)
                 })();
                 match res {
                     Ok(()) => {
                         max_show_accepted = session_id;
                         displayed_session = Some(session_id);
+                        last_painted = Some(LastPainted {
+                            session_id,
+                            hints,
+                            debug_rejects,
+                            debug_connectors,
+                        });
                     }
                     Err(e) => eprintln!("[render] show failed: {e}"),
                 }
@@ -335,28 +384,18 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     let st = stack.as_mut().ok_or_else(|| {
                         RenderError::Win32("repaint with no overlay stack".into())
                     })?;
-                    st.sync_to_monitors()?;
-                    let monitors: Vec<RECT> = st.slots.iter().map(|s| s.monitor).collect();
-                    let parts = partition_hints(&hints, &monitors);
-                    let dbg_parts = partition_debug_rejects(&debug_rejects, &monitors);
-                    for ((s, part), dpart) in
-                        st.slots.iter_mut().zip(parts.iter()).zip(dbg_parts.iter())
-                    {
-                        if let Some(ref mut g) = s.gpu {
-                            g.update_and_present(part, dpart, debug_connectors)?;
-                        }
-                        if part.is_empty() && dpart.is_empty() {
-                            let _ = ShowWindow(s.hwnd, SW_HIDE);
-                            s.visible = false;
-                        } else {
-                            let _ = ShowWindow(s.hwnd, SW_SHOW);
-                            s.visible = true;
-                        }
-                    }
-                    Ok::<(), RenderError>(())
+                    present_partitioned(st, &hints, &debug_rejects, debug_connectors)
                 })();
-                if let Err(e) = res {
-                    eprintln!("[render] repaint: {e}");
+                match res {
+                    Ok(()) => {
+                        last_painted = Some(LastPainted {
+                            session_id,
+                            hints,
+                            debug_rejects,
+                            debug_connectors,
+                        });
+                    }
+                    Err(e) => eprintln!("[render] repaint: {e}"),
                 }
             }
             RenderCmd::Hide { session_id } => {
@@ -367,8 +406,37 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     continue;
                 }
                 displayed_session = None;
+                last_painted = None;
                 if let Some(ref mut st) = stack {
                     unsafe { st.hide_all() };
+                }
+            }
+            RenderCmd::SyncMonitors => {
+                let res = (|| unsafe {
+                    let Some(ref mut st) = stack else {
+                        return Ok(());
+                    };
+                    if let Some(ref lp) = last_painted {
+                        if displayed_session == Some(lp.session_id) {
+                            present_partitioned(
+                                st,
+                                &lp.hints,
+                                &lp.debug_rejects,
+                                lp.debug_connectors,
+                            )?;
+                            return Ok(());
+                        }
+                    }
+                    st.sync_to_monitors()?;
+                    for s in &mut st.slots {
+                        if let Some(ref mut g) = s.gpu {
+                            g.sync_size_and_dpi()?;
+                        }
+                    }
+                    Ok::<(), RenderError>(())
+                })();
+                if let Err(e) = res {
+                    eprintln!("[render] sync_monitors: {e}");
                 }
             }
             RenderCmd::Shutdown => {

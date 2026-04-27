@@ -35,6 +35,7 @@ impl Renderer {
     /// Spawns the overlay thread (message pump + layered window).
     pub fn spawn() -> Result<Self, RenderError> {
         let (tx, rx) = unbounded();
+        overlay::set_render_command_sender(tx.clone());
         let thread = std::thread::Builder::new()
             .name("navigator-render".into())
             .spawn(move || overlay::run_render_thread(rx))
@@ -43,6 +44,13 @@ impl Renderer {
             cmd: tx,
             thread: Some(thread),
         })
+    }
+
+    /// Broadcast monitor/DPI sync (e.g. after config reload). Overlay HWNDs also react to `WM_DISPLAYCHANGE` / `WM_DPICHANGED`.
+    pub fn sync_monitors(&self) -> Result<(), RenderError> {
+        self.cmd
+            .send(overlay::RenderCmd::SyncMonitors)
+            .map_err(|_| RenderError::Disconnected)
     }
 
     /// Warms the overlay HWND and GPU stack while hidden (D2). Safe to call once after [`spawn`](Self::spawn).
@@ -129,6 +137,10 @@ impl Renderer {
     }
 
     pub fn prewarm(&self) -> Result<(), RenderError> {
+        Err(RenderError::UnsupportedPlatform)
+    }
+
+    pub fn sync_monitors(&self) -> Result<(), RenderError> {
         Err(RenderError::UnsupportedPlatform)
     }
 }

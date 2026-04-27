@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
@@ -12,24 +12,47 @@ use windows::Win32::System::Console::GetConsoleWindow;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    HOT_KEY_MODIFIERS, MOD_ALT, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_A, VK_BACK,
-    VK_ESCAPE, VK_OEM_1, VK_Z,
+    GetAsyncKeyState, HOT_KEY_MODIFIERS, RegisterHotKey, UnregisterHotKey, VK_A, VK_BACK,
+    VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT, VK_Z,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowW,
     GetForegroundWindow, GetMessageW, HHOOK, HWND_MESSAGE, KBDLLHOOKSTRUCT, MSG, PostMessageW,
     PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetWindowsHookExW, TranslateMessage,
     UnhookWindowsHookEx, UnregisterClassW, WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_DESTROY, WM_HOTKEY, WM_KEYDOWN, WM_SYSKEYDOWN, WNDCLASSEXW,
+    WM_DESTROY, WM_HOTKEY, WM_KEYDOWN, WM_SYSKEYDOWN, WM_USER, WNDCLASSEXW,
 };
 use windows::core::PCWSTR;
 
+use crate::chord;
 use crate::hotkey::PRIMARY_HOTKEY_ID;
 use crate::{HotkeyPress, InputError, InputEvent, SessionKey};
 
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
+};
+
 const BRING_FOREGROUND_WPARAM: usize = 1;
-/// `LLKHF_ALTDOWN` — pass through Alt combinations except the registered hotkey chord.
+/// `LLKHF_ALTDOWN` — distinguish Alt-derived system key events in the LL hook.
 const LLKHF_ALTDOWN: u32 = 0x20;
+
+const WM_REREGISTER_HOTKEY: u32 = WM_USER + 302;
+
+static HOTKEY_ATOMIC: AtomicU64 = AtomicU64::new(0);
+static INPUT_HWND: OnceLock<usize> = OnceLock::new();
+
+#[inline]
+fn store_hotkey(mods: HOT_KEY_MODIFIERS, vk: u32) {
+    HOTKEY_ATOMIC.store(((mods.0 as u64) << 32) | vk as u64, Ordering::Release);
+}
+
+fn load_hotkey() -> (HOT_KEY_MODIFIERS, u32) {
+    let v = HOTKEY_ATOMIC.load(Ordering::Acquire);
+    (
+        HOT_KEY_MODIFIERS((v >> 32) as u32),
+        (v & 0xFFFF_FFFF) as u32,
+    )
+}
 
 struct PumpCtx {
     tx: Sender<InputEvent>,
@@ -48,6 +71,19 @@ static HOOK_STATE: OnceLock<HookState> = OnceLock::new();
 /// Wide class name; must match [`crate::hotkey::MESSAGE_WINDOW_CLASS`](crate::hotkey::MESSAGE_WINDOW_CLASS).
 fn class_pcwstr() -> PCWSTR {
     windows::core::w!("Navigator.InputSink.M2")
+}
+
+fn try_reregister_hotkey(hwnd: HWND, new_mods: HOT_KEY_MODIFIERS, new_vk: u32) {
+    let (old_mods, old_vk) = load_hotkey();
+    let _ = unsafe { UnregisterHotKey(Some(hwnd), PRIMARY_HOTKEY_ID) };
+    if let Err(e) = unsafe { RegisterHotKey(Some(hwnd), PRIMARY_HOTKEY_ID, new_mods, new_vk) } {
+        eprintln!("[input] hotkey reload failed: {e}. Restoring previous registration.");
+        if unsafe { RegisterHotKey(Some(hwnd), PRIMARY_HOTKEY_ID, old_mods, old_vk) }.is_err() {
+            eprintln!("[input] could not restore hotkey; you may need to restart Navigator.");
+        }
+    } else {
+        store_hotkey(new_mods, new_vk);
+    }
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -70,6 +106,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let _ = ctx.tx.send(event);
             LRESULT(0)
         }
+        m if m == WM_REREGISTER_HOTKEY => {
+            let new_mods = HOT_KEY_MODIFIERS(wparam.0 as u32);
+            let new_vk = lparam.0 as u32;
+            try_reregister_hotkey(hwnd, new_mods, new_vk);
+            LRESULT(0)
+        }
         m if m == WM_APP && wparam.0 == BRING_FOREGROUND_WPARAM => {
             let console = unsafe { GetConsoleWindow() };
             if !console.is_invalid() {
@@ -83,6 +125,31 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
+}
+
+/// `reg` includes `MOD_NOREPEAT`; we mask that for key-state checks.
+fn hotkey_mods_satisfied(reg: u32) -> bool {
+    let r = reg & !(MOD_NOREPEAT.0);
+    unsafe {
+        if (r & MOD_ALT.0) != 0 && (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000) == 0 {
+            return false;
+        }
+        if (r & MOD_CONTROL.0) != 0 && (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) == 0
+        {
+            return false;
+        }
+        if (r & MOD_SHIFT.0) != 0 && (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) == 0 {
+            return false;
+        }
+        if (r & MOD_WIN.0) != 0 {
+            let win = (GetAsyncKeyState(VK_LWIN.0 as i32) as u16 & 0x8000) != 0
+                || (GetAsyncKeyState(VK_RWIN.0 as i32) as u16 & 0x8000) != 0;
+            if !win {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 unsafe extern "system" fn low_level_keyboard_proc(
@@ -109,21 +176,29 @@ unsafe extern "system" fn low_level_keyboard_proc(
     let vk = kb.vkCode;
     let flags = kb.flags.0;
 
-    // Let `RegisterHotKey` (`Alt+;`) reach the message pump.
-    if vk == VK_OEM_1.0 as u32 && (flags & LLKHF_ALTDOWN) != 0 {
+    let (reg_mods, reg_vk) = load_hotkey();
+    if vk == reg_vk && hotkey_mods_satisfied(reg_mods.0) {
         return unsafe { CallNextHookEx(None, code, wparam, lparam) };
     }
-    // Other Alt chords (menus, shortcuts) while hint mode is on.
+
+    // Let other Alt combinations (menus) through.
     if (flags & LLKHF_ALTDOWN) != 0 {
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+    }
+    // Do not swallow common Win / Ctrl shortcuts while filter mode is on.
+    if (unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } as u16 & 0x8000) != 0
+        || (unsafe { GetAsyncKeyState(VK_LWIN.0 as i32) } as u16 & 0x8000) != 0
+        || (unsafe { GetAsyncKeyState(VK_RWIN.0 as i32) } as u16 & 0x8000) != 0
+    {
         return unsafe { CallNextHookEx(None, code, wparam, lparam) };
     }
 
     let event = match vk {
         x if x == VK_ESCAPE.0 as u32 => Some(SessionKey::Escape),
         x if x == VK_BACK.0 as u32 => Some(SessionKey::Backspace),
-        x if (VK_A.0 as u32..=VK_Z.0 as u32).contains(&x) => Some(SessionKey::Char(
-            char::from_u32(x - VK_A.0 as u32 + u32::from(b'a')).unwrap_or('a'),
-        )),
+        x if (VK_A.0 as u32..=VK_Z.0 as u32).contains(&x) => {
+            chord::vk_session_char(x).map(SessionKey::Char)
+        }
         _ => None,
     };
 
@@ -165,7 +240,12 @@ pub struct InputThread {
 }
 
 impl InputThread {
-    pub fn spawn() -> Result<(Self, crossbeam_channel::Receiver<InputEvent>), InputError> {
+    /// Spawns the input thread and registers a global hotkey from `chord` (see `nav-config` `[hotkey].chord`).
+    pub fn spawn_with_chord(
+        chord: &str,
+    ) -> Result<(Self, crossbeam_channel::Receiver<InputEvent>), InputError> {
+        let (init_mods, init_vk) = chord::parse_chord(chord)
+            .map_err(|e| InputError::HotkeyRegisterFailed { details: e })?;
         let (tx, rx) = crossbeam_channel::unbounded();
         let (started_tx, started_rx) = mpsc::channel::<Result<(), InputError>>();
         let hint_mode = Arc::new(AtomicBool::new(false));
@@ -235,9 +315,9 @@ impl InputThread {
                     )?
                 };
 
-                let mods = HOT_KEY_MODIFIERS(MOD_ALT.0 | MOD_NOREPEAT.0);
-                let vk = VK_OEM_1.0 as u32;
-                if let Err(e) = unsafe { RegisterHotKey(Some(hwnd), PRIMARY_HOTKEY_ID, mods, vk) } {
+                if let Err(e) =
+                    unsafe { RegisterHotKey(Some(hwnd), PRIMARY_HOTKEY_ID, init_mods, init_vk) }
+                {
                     unsafe {
                         let _ = UnhookWindowsHookEx(hook);
                         let _ = DestroyWindow(hwnd);
@@ -246,6 +326,8 @@ impl InputThread {
                         details: e.to_string(),
                     });
                 }
+                store_hotkey(init_mods, init_vk);
+                let _ = INPUT_HWND.set(hwnd.0 as usize);
 
                 Ok((hwnd, hook))
             };
@@ -304,5 +386,24 @@ impl InputThread {
             Ok(Err(e)) => Err(e),
             Err(_) => Err(InputError::ThreadEndedDuringStartup),
         }
+    }
+
+    /// Re-parses `chord` and re-registers the hotkey on the input thread (e.g. after tray Reload).
+    pub fn reregister_hotkey(&self, chord: &str) -> Result<(), InputError> {
+        let (mods, vk) = chord::parse_chord(chord)
+            .map_err(|e| InputError::HotkeyRegisterFailed { details: e })?;
+        let Some(&raw) = INPUT_HWND.get() else {
+            return Err(InputError::ThreadEndedDuringStartup);
+        };
+        let hwnd = HWND(raw as *mut core::ffi::c_void);
+        unsafe {
+            PostMessageW(
+                Some(hwnd),
+                WM_REREGISTER_HOTKEY,
+                WPARAM(mods.0 as usize),
+                LPARAM(vk as isize),
+            )?;
+        }
+        Ok(())
     }
 }

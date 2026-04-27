@@ -400,9 +400,9 @@ Engineers update this table as part of each PR.
 | M5  | End-to-end MVP             | **Done***| —                    | *Orchestration lives in `crates/nav-app/src/main.rs` (no separate `orchestrator` crate yet). Hint mode: `WH_KEYBOARD_LL` in `nav-input`. Formal 100× reliability / fault-injection gates still manual.* |
 | M6  | UIA cache                  | **Done** | —                    | D1: `FindAllBuildCache` + cache request; `FindAll` fallback; invoke cache/current pattern (`04-build-order.md` D1). P95 gates still to bench. |
 | M7  | Pre-warm                   | **Done***| —                    | D2: `Renderer::prewarm()` + overlay thread; *formal cold-start script / P95 gate still manual.* |
-| M8  | Multi-monitor              | TODO     | —                    |       |
+| M8  | Multi-monitor              | **Done** | —                    | Display/DPI resync + per-monitor overlay (`WM_DISPLAYCHANGE` / `WM_DPICHANGED`). |
 | M9  | Fallbacks                  | **Partial** | —                 | MSAA + HWND + soft stage budgets + diagnose dump; automated matrix / reliability gates not in CI. |
-| M10 | Config + tray              | **Partial** | —                 | Discovery, `[log]` + budgets, tray + reload + reset; full schema + appearance reload deferred. |
+| M10 | Config + tray              | **Done*** | —                 | `[hotkey].chord` + tray reload re-registers hotkey; *optional settings GUI still out of scope.* |
 | M11 | Release                    | TODO     | —                    |       |
 | M12 | Glyph atlas (post-v1)      | TODO     | —                    |       |
 | M13 | Progressive reveal         | TODO     | —                    |       |

@@ -100,7 +100,7 @@ fn main() -> std::process::ExitCode {
         }
     };
 
-    let (input, rx) = match InputThread::spawn() {
+    let (input, rx) = match InputThread::spawn_with_chord(&cfg.hotkey.chord) {
         Ok(x) => x,
         Err(e) => {
             eprintln!("{e}");
@@ -165,6 +165,12 @@ fn main() -> std::process::ExitCode {
                 alphabet: alph,
                 enum_opts: opts,
             };
+            if let Err(e) = input.reregister_hotkey(&c.hotkey.chord) {
+                eprintln!("[config] reload: hotkey: {e}");
+            }
+            if let Err(e) = renderer.sync_monitors() {
+                eprintln!("[config] reload: overlay sync: {e}");
+            }
             println!("[config] reloaded");
         }
         Err(e) => eprintln!("[config] reload failed: {e}"),

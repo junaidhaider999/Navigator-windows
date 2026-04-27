@@ -8,6 +8,9 @@
 mod hotkey;
 
 #[cfg(windows)]
+mod chord;
+
+#[cfg(windows)]
 mod thread;
 
 #[cfg(windows)]
@@ -49,9 +52,7 @@ pub enum InputEvent {
 pub enum InputError {
     #[error("nav-input is only supported on Windows")]
     UnsupportedPlatform,
-    #[error(
-        "could not register global hotkey Alt+; (MOD_ALT|MOD_NOREPEAT, VK_OEM_1). Another application may already use this chord. {details}"
-    )]
+    #[error("could not register global hotkey: {details}")]
     HotkeyRegisterFailed { details: String },
     #[cfg(windows)]
     #[error(transparent)]
@@ -75,7 +76,7 @@ mod tests {
     #[test]
     fn spawn_errors_on_non_windows() {
         assert!(matches!(
-            crate::InputThread::spawn(),
+            crate::InputThread::spawn_with_chord("alt+;"),
             Err(crate::InputError::UnsupportedPlatform)
         ));
     }

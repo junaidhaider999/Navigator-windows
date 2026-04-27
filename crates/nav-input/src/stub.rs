@@ -12,7 +12,11 @@ pub struct InputThread {
 }
 
 impl InputThread {
-    pub fn spawn() -> Result<(Self, Receiver<InputEvent>), InputError> {
+    pub fn spawn_with_chord(_chord: &str) -> Result<(Self, Receiver<InputEvent>), InputError> {
+        Err(InputError::UnsupportedPlatform)
+    }
+
+    pub fn reregister_hotkey(&self, _chord: &str) -> Result<(), InputError> {
         Err(InputError::UnsupportedPlatform)
     }
 }
