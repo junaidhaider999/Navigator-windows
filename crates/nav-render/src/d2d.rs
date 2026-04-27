@@ -200,7 +200,7 @@ impl D2dCompositionRenderer {
                 DWRITE_FONT_WEIGHT_NORMAL,
                 DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL,
-                15.0,
+                scene::PILL_FONT_EM_DIPS,
                 w!("en-us"),
             )
             .map_err(|e| RenderError::Win32(e.to_string()))?;

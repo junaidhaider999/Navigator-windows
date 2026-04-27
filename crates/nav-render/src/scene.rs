@@ -92,10 +92,122 @@ pub fn paint_plan(old: &[PillGeom], new: &[PillGeom], client_w: f32, client_h: f
     }
 }
 
-const MIN_PILL_W: f32 = 72.0;
-const MIN_PILL_H: f32 = 28.0;
-const MAX_PILL_W: f32 = 200.0;
-const MAX_PILL_H: f32 = 80.0;
+/// Em height (DIPs) for hint labels; must match `CreateTextFormat` in `d2d::D2dCompositionRenderer::new`.
+pub const PILL_FONT_EM_DIPS: f32 = 15.0;
+const PILL_PAD_X: f32 = 8.0;
+const PILL_PAD_Y: f32 = 5.0;
+/// Nudge pill slightly outside the element top-left anchor.
+const PILL_OUTSET: f32 = 2.0;
+/// Rough average Latin glyph width at [`PILL_FONT_EM_DIPS`] (layout estimate, not shaped text).
+const PILL_CHAR_W_EST: f32 = 7.4;
+const PILL_MIN_W: f32 = 22.0;
+const PILL_MIN_H: f32 = 20.0;
+const PILL_MAX_W: f32 = 280.0;
+
+fn estimate_label_width_dips(label: &str) -> f32 {
+    let n = label.chars().count().max(1) as f32;
+    (n * PILL_CHAR_W_EST).max(10.0)
+}
+
+fn pill_size_for_label(label: &str) -> (f32, f32) {
+    let tw = estimate_label_width_dips(label);
+    let pw = (PILL_PAD_X.mul_add(2.0, tw)).clamp(PILL_MIN_W, PILL_MAX_W);
+    let ph = (PILL_PAD_Y.mul_add(2.0, PILL_FONT_EM_DIPS * 1.15)).max(PILL_MIN_H);
+    (pw, ph)
+}
+
+fn rects_overlap(a: &D2D_RECT_F, b: &D2D_RECT_F) -> bool {
+    a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+}
+
+fn clamp_pill_to_client(mut r: D2D_RECT_F, client_w: f32, client_h: f32) -> Option<D2D_RECT_F> {
+    const MIN_SPAN: f32 = 4.0;
+    r.left = r.left.max(0.0);
+    r.top = r.top.max(0.0);
+    r.right = r.right.min(client_w);
+    r.bottom = r.bottom.min(client_h);
+    if r.right - r.left >= MIN_SPAN && r.bottom - r.top >= MIN_SPAN {
+        Some(r)
+    } else {
+        None
+    }
+}
+
+/// TL → TR → BL → BR for each micro-offset ring (§07-style de-collision).
+fn pill_rect_candidates(
+    el_left: f32,
+    el_top: f32,
+    el_w: f32,
+    el_h: f32,
+    pw: f32,
+    ph: f32,
+) -> Vec<D2D_RECT_F> {
+    let o = PILL_OUTSET;
+    let corners = [
+        (el_left - o, el_top - o),
+        (el_left + el_w - pw + o, el_top - o),
+        (el_left - o, el_top + el_h - ph + o),
+        (el_left + el_w - pw + o, el_top + el_h - ph + o),
+    ];
+    let mut offs = Vec::with_capacity(40);
+    offs.push((0.0f32, 0.0f32));
+    for k in 1_i32..=8 {
+        let s = k as f32 * 5.0;
+        offs.push((s, 0.0));
+        offs.push((-s, 0.0));
+        offs.push((0.0, s));
+        offs.push((0.0, -s));
+        offs.push((s * 0.75, s * 0.75));
+        offs.push((-s * 0.75, s * 0.75));
+    }
+    let mut out = Vec::with_capacity(corners.len() * offs.len());
+    for (dx, dy) in offs {
+        for (l, t) in corners {
+            let left = l + dx;
+            let top = t + dy;
+            out.push(D2D_RECT_F {
+                left,
+                top,
+                right: left + pw,
+                bottom: top + ph,
+            });
+        }
+    }
+    out
+}
+
+fn choose_pill_rect(
+    el_left: f32,
+    el_top: f32,
+    el_w: f32,
+    el_h: f32,
+    pw: f32,
+    ph: f32,
+    placed: &[PillGeom],
+    client_w: f32,
+    client_h: f32,
+) -> Option<D2D_RECT_F> {
+    for cand in pill_rect_candidates(el_left, el_top, el_w, el_h, pw, ph) {
+        if let Some(r) = clamp_pill_to_client(cand, client_w, client_h) {
+            if placed.iter().all(|p| !rects_overlap(&r, &p.rect)) {
+                return Some(r);
+            }
+        }
+    }
+    let o = PILL_OUTSET;
+    let l = el_left - o;
+    let t = el_top - o;
+    clamp_pill_to_client(
+        D2D_RECT_F {
+            left: l,
+            top: t,
+            right: l + pw,
+            bottom: t + ph,
+        },
+        client_w,
+        client_h,
+    )
+}
 
 /// `overlay_origin_phys` is the overlay HWND top-left in physical screen pixels (matches UIA bounds).
 pub fn pills_for_frame(
@@ -110,34 +222,23 @@ pub fn pills_for_frame(
     }
     let (ox, oy) = overlay_origin_phys;
     let scale = 96.0 / dpi;
-    let mut out = Vec::with_capacity(hints.len());
+    let mut placed = Vec::with_capacity(hints.len());
     for h in hints {
-        let left = (h.raw.bounds.x - ox) as f32 * scale;
-        let top = (h.raw.bounds.y - oy) as f32 * scale;
-        let w = h.raw.bounds.w as f32 * scale;
-        let hgt = h.raw.bounds.h as f32 * scale;
-        let cx = left + w * 0.5;
-        let cy = top + hgt * 0.5;
-        let pw = w.clamp(MIN_PILL_W, MAX_PILL_W);
-        let ph = hgt.clamp(MIN_PILL_H, MAX_PILL_H);
-        let mut rect = D2D_RECT_F {
-            left: cx - pw * 0.5,
-            top: cy - ph * 0.5,
-            right: cx + pw * 0.5,
-            bottom: cy + ph * 0.5,
-        };
-        rect.left = rect.left.max(0.0);
-        rect.top = rect.top.max(0.0);
-        rect.right = rect.right.min(client_w);
-        rect.bottom = rect.bottom.min(client_h);
-        if rect.right > rect.left && rect.bottom > rect.top {
-            out.push(PillGeom {
+        let el_left = (h.raw.bounds.x - ox) as f32 * scale;
+        let el_top = (h.raw.bounds.y - oy) as f32 * scale;
+        let el_w = h.raw.bounds.w as f32 * scale;
+        let el_h = h.raw.bounds.h as f32 * scale;
+        let (pw, ph) = pill_size_for_label(h.label.as_ref());
+        if let Some(rect) = choose_pill_rect(
+            el_left, el_top, el_w, el_h, pw, ph, &placed, client_w, client_h,
+        ) {
+            placed.push(PillGeom {
                 rect,
                 label: h.label.to_string(),
             });
         }
     }
-    out
+    placed
 }
 
 const CORNER_RADIUS: f32 = 8.0;
@@ -226,6 +327,34 @@ pub fn pill_text_color() -> D2D1_COLOR_F {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nav_core::{Backend, ElementKind, RawHint, Rect};
+
+    fn hint_at(label: &str, element_id: u64, x: i32, y: i32, w: i32, h: i32) -> Hint {
+        Hint {
+            raw: RawHint {
+                element_id,
+                uia_invoke_hwnd: None,
+                uia_child_index: None,
+                bounds: Rect { x, y, w, h },
+                kind: ElementKind::Invoke,
+                name: None,
+                backend: Backend::Uia,
+            },
+            label: label.into(),
+            score: 0.0,
+        }
+    }
+
+    fn any_pairwise_overlap(pills: &[PillGeom]) -> bool {
+        for i in 0..pills.len() {
+            for j in (i + 1)..pills.len() {
+                if rects_overlap(&pills[i].rect, &pills[j].rect) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 
     fn pill(label: &str, rect: D2D_RECT_F) -> PillGeom {
         PillGeom {
@@ -295,5 +424,41 @@ mod tests {
         )];
         let new: Vec<PillGeom> = vec![];
         assert_eq!(paint_plan(&old, &new, 100.0, 100.0), PaintPlan::Full);
+    }
+
+    #[test]
+    fn adjacent_toolbar_buttons_avoid_overlap() {
+        let hints = vec![
+            hint_at("a", 1, 0, 0, 24, 24),
+            hint_at("s", 2, 24, 0, 24, 24),
+            hint_at("d", 3, 48, 0, 24, 24),
+        ];
+        let pills = pills_for_frame(&hints, (0, 0), 800.0, 200.0, 96.0);
+        assert_eq!(pills.len(), 3);
+        assert!(
+            !any_pairwise_overlap(&pills),
+            "expected de-collision, got {:?}",
+            pills
+        );
+    }
+
+    #[test]
+    fn longer_label_increases_pill_width() {
+        let short = pills_for_frame(&[hint_at("a", 1, 0, 0, 40, 40)], (0, 0), 800.0, 600.0, 96.0);
+        let long = pills_for_frame(
+            &[hint_at("abc", 1, 0, 0, 40, 40)],
+            (0, 0),
+            800.0,
+            600.0,
+            96.0,
+        );
+        assert_eq!(short.len(), 1);
+        assert_eq!(long.len(), 1);
+        let sw = short[0].rect.right - short[0].rect.left;
+        let lw = long[0].rect.right - long[0].rect.left;
+        assert!(
+            lw > sw + 4.0,
+            "long label should widen pill: short={sw} long={lw}"
+        );
     }
 }
