@@ -241,6 +241,8 @@ The standard target. We are now in shipping range for v1.
 
 ## Phase E — Compatibility and polish
 
+**M9 (fallbacks) — acceptance tests and manual gates:** `m9-acceptance.md`.
+
 ### E1. MSAA fallback (`fallback_msaa.rs`)
 
 - **Goal:** when UIA returns 0 elements (some legacy Win32 dialogs, DirectUI

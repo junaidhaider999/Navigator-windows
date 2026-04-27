@@ -1,4 +1,15 @@
 //! `UiaRuntime`: COM apartment + `CUIAutomation8` (fallback `CUIAutomation`) singleton.
+//!
+//! ## M9 fallback ladder (`FallbackPolicy::Auto`)
+//!
+//! 1. **UIA** — `FindAllBuildCache` (or `FindAll` on pattern-cache build failure) with
+//!    [`EnumOptions::budget_uia_ms`](crate::options::EnumOptions::budget_uia_ms).
+//! 2. If no hints: **MSAA** — `AccessibleObjectFromWindow` + DFS; budget
+//!    [`EnumOptions::budget_msaa_ms`].
+//! 3. If still no hints: **raw HWND** — `EnumChildWindows` + `GetWindowRect`; budget
+//!    [`EnumOptions::budget_hwnd_ms`].
+//!
+//! `MsaaOnly` and `UiaOnly` run a single stage (with the matching budget where applicable).
 
 use std::sync::Mutex;
 

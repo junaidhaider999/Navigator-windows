@@ -1,6 +1,13 @@
 //! Enumeration options (`Agent/workflow/03-modules.md`).
 
-/// How to apply MSAA / raw-HWND fallbacks (not used in the B3 baseline path).
+// --- M9 (`10-milestones.md`) default soft stage budgets (ms) ----------------
+// These values must match `[fallback.budget_ms]` defaults in `nav-config` and `config.toml` seeds.
+/// Soft cap for the UIA / `FindAll` stage in [`FallbackPolicy::Auto`](FallbackPolicy::Auto) (logged when exceeded).
+pub const M9_DEFAULT_BUDGET_UIA_MS: u64 = 25;
+/// Soft cap for the MSAA / `IAccessible` stage in [`FallbackPolicy::Auto`].
+pub const M9_DEFAULT_BUDGET_MSAA_MS: u64 = 8;
+/// Soft cap for the raw-`EnumChildWindows` stage in [`FallbackPolicy::Auto`].
+pub const M9_DEFAULT_BUDGET_HWND_MS: u64 = 5;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FallbackPolicy {
     Auto,
@@ -33,9 +40,9 @@ impl Default for EnumOptions {
             include_offscreen: false,
             include_disabled: false,
             fallback: FallbackPolicy::Auto,
-            budget_uia_ms: 25,
-            budget_msaa_ms: 8,
-            budget_hwnd_ms: 5,
+            budget_uia_ms: M9_DEFAULT_BUDGET_UIA_MS,
+            budget_msaa_ms: M9_DEFAULT_BUDGET_MSAA_MS,
+            budget_hwnd_ms: M9_DEFAULT_BUDGET_HWND_MS,
             debug_uia: false,
             debug_overlay: false,
         }

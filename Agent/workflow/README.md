@@ -32,10 +32,11 @@ subtrees) and **D4** (partial overlay repaint) are also in-tree — see
 **exit** metrics (P95 on the reference set) remain to be proven on the reference
 machine.
 
-Phase **E** — **E1** (MSAA) and **E2** (raw HWND) fallback enumerators and invoke
-dispatch are **in tree** (`nav-uia::fallback_*`, `FallbackPolicy::Auto`). Per-step
-time budgets, tray diagnostics, and coverage matrix gates are **not** done. **E3–E5**
-(multi-monitor/DPI polish, tray + reload, release artifacts) are still open.
+Phase **E** — **E1** (MSAA) and **E2** (raw HWND) fallback enumerators, `Auto` ladder,
+per-step budgets, and tray **Diagnose** are **in tree**; see
+[`m9-acceptance.md`](m9-acceptance.md) for acceptance tests and what remains manual
+(coverage %, 1000-trigger field runs). **E3–E5** details: `04-build-order.md` Phase E;
+release packaging is still **M11**.
 
 **Configuration** — `nav-config`: `[hints]`, `[log]`, `[fallback.budget_ms]`;
 `load_for_startup` discovery; **`--reset-config`**; tray **Reload** reapplies
@@ -48,6 +49,7 @@ in [`13-configuration.md`](13-configuration.md) (partial M10).
 
 | #  | File                                | Purpose                                                                         |
 |----|-------------------------------------|---------------------------------------------------------------------------------|
+| M9 | `m9-acceptance.md`                  | M9 fallback ladder, budget parity, CI vs manual gates.                            |
 | 00 | `00-overview.md`                    | Vision, principles, hard performance budget, non-goals.                         |
 | 01 | `01-architecture.md`                | System architecture, threading model, data flow, control flow.                  |
 | 02 | `02-folder-structure.md`            | Repo layout, Cargo workspace, crate boundaries.                                 |

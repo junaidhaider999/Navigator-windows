@@ -84,6 +84,7 @@ pub struct LogConfig {
     pub level: Option<String>,
 }
 
+// M9 default stage budgets (ms) — must match `nav_uia::M9_DEFAULT_BUDGET_*_MS` and `m9-acceptance.md`.
 fn default_budget_uia() -> u64 {
     25
 }

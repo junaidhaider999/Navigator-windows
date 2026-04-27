@@ -248,18 +248,19 @@ hotkey works on each, hints appear at correct sizes.
 
 **Theme:** Reliability beats coverage.
 
-**Repo status:** **Partial.** **E1/E2** are implemented: `nav-uia::fallback_msaa`
-and `nav-uia::fallback_hwnd`, `FallbackPolicy` (`Auto` / `UiaOnly` / `MsaaOnly`),
-enumerate ladder when UIA yields no rows, and **invoke** routed by hint `Backend`.
-Soft **per-stage time budgets** (default 25 / 8 / 5 ms) are wired in
-`EnumOptions` and logged to stderr when a stage exceeds its budget. **Diagnose**
-is available from the tray (shallow UIA tree dump to `%TEMP%\\navigator-uia-dump.txt`).
-**Not** automated: 1000-trigger reliability and coverage matrix CI.
+**Repo status:** **Done\*.** E1/E2: `nav-uia::fallback_msaa` and `nav-uia::fallback_hwnd`,
+`FallbackPolicy` (`Auto` / `UiaOnly` / `MsaaOnly`), enumerate ladder when UIA yields no rows,
+and **invoke** routed by hint `Backend`. Soft **per-stage time budgets** (default 25 / 8 / 5 ms;
+constants `M9_DEFAULT_BUDGET_*_MS` in `nav-uia::options`, mirrored in `nav-config`) are logged
+to stderr when a stage exceeds its budget. **Diagnose** is on the tray (UIA dump to
+`%TEMP%\\navigator-uia-dump.txt`). **CI:** `cargo test -p nav-uia` on Windows runs
+`tests/m9_acceptance.rs` (smoke + repeatability on `Shell_TrayWnd`). **Still manual per
+`00-overview.md`:** per-app **coverage %** and the **1000-trigger / 99.9%** field gate — see
+[`m9-acceptance.md`](m9-acceptance.md).
 
 **Scope:**
 - `nav-uia::fallback_msaa` — `IAccessible` enumerator.
-- `nav-uia::fallback_hwnd` — `EnumChildWindows` walker + `SendInput`
-  click.
+- `nav-uia::fallback_hwnd` — `EnumChildWindows` walker + `SendInput` click.
 - Orchestrator fallback ladder with per-step time budgets (25 / 8 / 5 ms).
 - "Diagnose" tray menu item that captures a UIA dump for failing windows.
 
@@ -401,7 +402,7 @@ Engineers update this table as part of each PR.
 | M6  | UIA cache                  | **Done** | —                    | D1: `FindAllBuildCache` + cache request; `FindAll` fallback; invoke cache/current pattern (`04-build-order.md` D1). P95 gates still to bench. |
 | M7  | Pre-warm                   | **Done***| —                    | D2: `Renderer::prewarm()` + overlay thread; *formal cold-start script / P95 gate still manual.* |
 | M8  | Multi-monitor              | **Done** | —                    | Display/DPI resync + per-monitor overlay (`WM_DISPLAYCHANGE` / `WM_DPICHANGED`). |
-| M9  | Fallbacks                  | **Partial** | —                 | MSAA + HWND + soft stage budgets + diagnose dump; automated matrix / reliability gates not in CI. |
+| M9  | Fallbacks                  | **Done\***| —                 | Ladder + budgets + diagnose; CI: `m9_acceptance` tests. *Coverage % + 1000-trigger field gate manual (`m9-acceptance.md`).* |
 | M10 | Config + tray              | **Done*** | —                 | `[hotkey].chord` + tray reload re-registers hotkey; *optional settings GUI still out of scope.* |
 | M11 | Release                    | TODO     | —                    |       |
 | M12 | Glyph atlas (post-v1)      | TODO     | —                    |       |
