@@ -4,9 +4,17 @@
 > decision the user must make and a code path we must keep working.
 > **Bias hard toward sensible defaults.**
 
-**Repo state:** there is no `nav-config` crate yet; the running **`navigator`**
-binary uses compile-time defaults (e.g. alphabet in `nav-app`). The sections
-below remain the **target** design for **M10**.
+**Repo state:** `crates/nav-config` exists and **`navigator`** loads it at startup.
+
+- **`nav_config::load(Optional<Path>)`** — if no path, returns built-in defaults.
+- **Implemented TOML subset:** `[hints]` only — `alphabet` (string) and
+  `max_elements` (usize). Defaults: alphabet `"sadfjklewcmpgh"`, **`max_elements`
+  2048** (aligned with `EnumOptions` default in `nav-uia`).
+- **CLI (today):** `--config <path>`, `--print-config` (prints `Debug` of merged
+  `Config`, then exits).
+- **Not implemented yet:** discovery order (`NAVIGATOR_CONFIG`, `%APPDATA%`,
+  exe-dir), hot reload, `--reset-config`, and every other section below — those
+  remain the **target** design for the rest of **M10**.
 
 ## Principles
 
@@ -67,8 +75,8 @@ debug_chord = "alt+shift+;"
 alphabet = "sadfjkle wcmpgh"
 
 # Maximum elements to label per session. Hard cap.
-# Default: 1024
-max_elements = 1024
+# Default in code today: 2048 (see nav-config / nav-uia EnumOptions).
+max_elements = 2048
 
 # When the user types a non-alphabet character: "ignore" or "cancel".
 # Default: "cancel"

@@ -124,7 +124,11 @@ pub enum SessionEvent {
 
 **Owns:** `config.toml` schema, defaults, discovery order, CLI parser.
 
-### Public API
+**Repo status:** **`[hints]` only** in code (`alphabet`, `max_elements`), plus
+`load(Option<&Path>)` and `alphabet_chars(&Config)`. The full `Config` shape and
+`load(args)` below are still the **target** for M10.
+
+### Public API (target)
 
 ```rust
 #[derive(Debug, Deserialize, Serialize, Clone)]

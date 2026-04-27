@@ -54,6 +54,8 @@ This is the **daily checklist**. Each step lists:
 
 - **Goal:** parse `config.toml`, with defaults embedded.
 - **Touches:** `crates/nav-config/**`, `assets/default-config.toml`.
+- **Implemented (partial):** `nav-config::load`, **`[hints]`** (`alphabet`,
+  `max_elements`), defaults; **`navigator --config`**, **`--print-config`**.
 - **Done when:**
   - Round-trip test: load defaults, serialize, parse, equals.
   - CLI `--config` flag overrides; `--print-config` dumps merged config.
@@ -243,6 +245,9 @@ The standard target. We are now in shipping range for v1.
 
 - **Goal:** when UIA returns 0 elements (some legacy Win32 dialogs, DirectUI
   shell stuff), fall back to `IAccessible::accChild` walking.
+- **Implemented:** `fallback_msaa` enumerates via `AccessibleObjectFromWindow` +
+  DFS; `invoke_msaa_at` calls `accDoDefaultAction` in walk order. Used when
+  `FallbackPolicy::Auto` and baseline UIA enumeration is empty (see `runtime.rs`).
 - **Done when:**
   - The Win32 "Run" dialog (`Win+R`) shows hints on the OK / Cancel /
     Browse buttons.
@@ -252,6 +257,8 @@ The standard target. We are now in shipping range for v1.
 
 - **Goal:** last resort. `EnumChildWindows`, filter visible + enabled,
   treat as `GenericClickable` and click via `SendInput` at center.
+- **Implemented:** child HWND collection + center click invoke when chosen as
+  fallback backend (`Backend::RawHwnd`).
 - **Done when:**
   - The MSAA-failing fixtures still get hints.
   - This path is **never** chosen unless the prior two yielded zero.
@@ -331,12 +338,13 @@ This is the elite version.
 
 ## Daily checklist (post-Phase B)
 
-Run **before each commit**:
+Run **before each commit** (matches `.github/workflows/ci.yml`):
 
 ```powershell
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo bench -p nav-bench -- --quick
 cargo deny check
 ```
 

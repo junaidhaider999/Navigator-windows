@@ -144,7 +144,7 @@ boundaries; same-crate sibling modules are implementation detail.
 | Crate         | Depends on                        | Knows about Win32?  |
 |---------------|-----------------------------------|---------------------|
 | `nav-core`    | std, serde                        | No                  |
-| `nav-config`  | nav-core, toml, serde, clap       | No                  |
+| `nav-config`  | serde, toml, thiserror            | No                  |
 | `nav-uia`     | nav-core, windows, parking_lot    | Yes (UIA only)      |
 | `nav-input`   | nav-core, windows                 | Yes (User32, hooks) |
 | `nav-render`  | nav-core, windows                 | Yes (D2D/D3D/DComp) |

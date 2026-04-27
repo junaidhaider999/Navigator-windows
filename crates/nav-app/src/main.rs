@@ -13,6 +13,8 @@ mod single_instance;
 fn main() -> std::process::ExitCode {
     use std::sync::atomic::Ordering;
 
+    use std::path::PathBuf;
+
     use clap::Parser;
     use nav_core::{NavEnumerateResult, Session, SessionEvent, plan};
     use nav_input::{InputEvent, InputThread, SessionKey};
@@ -34,10 +36,33 @@ fn main() -> std::process::ExitCode {
         /// Draw translucent rects for nodes skipped after UIA match (diagnostics).
         #[arg(long)]
         debug_overlay: bool,
+        /// TOML config file (`Agent/workflow/13-configuration.md`). When omitted, use defaults.
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
+        /// Print merged effective config and exit.
+        #[arg(long)]
+        print_config: bool,
     }
 
     let cli = Cli::parse();
     logging::init(cli.log.as_deref());
+
+    let cfg = match nav_config::load(cli.config.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("config: {e}");
+            return std::process::ExitCode::from(1);
+        }
+    };
+    if cli.print_config {
+        println!("{cfg:#?}");
+        return std::process::ExitCode::from(0);
+    }
+    let alphabet = nav_config::alphabet_chars(&cfg);
+    if alphabet.len() < 2 {
+        eprintln!("config: [hints].alphabet must have at least 2 non-whitespace characters");
+        return std::process::ExitCode::from(1);
+    }
 
     let _guard = match single_instance::acquire() {
         Ok(g) => g,
@@ -77,6 +102,7 @@ fn main() -> std::process::ExitCode {
         eprintln!("render prewarm: {e}");
     }
     let enum_opts = EnumOptions {
+        max_elements: cfg.hints.max_elements,
         debug_uia: cli.debug_uia,
         debug_overlay: cli.debug_overlay,
         ..Default::default()
@@ -90,8 +116,6 @@ fn main() -> std::process::ExitCode {
     let mut active_debug_rejects: Vec<nav_core::UiaDebugReject> = Vec::new();
     // Overlay shows only debug rects (no actionable hints); Escape or activation hotkey dismisses.
     let mut overlay_debug_only: bool = false;
-    let alphabet: Vec<char> = "sadfjklewcmpgh".chars().collect();
-
     println!("Navigator ready");
 
     while let Ok(ev) = rx.recv() {

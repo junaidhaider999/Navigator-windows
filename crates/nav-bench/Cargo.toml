@@ -14,3 +14,19 @@ nav-core = { workspace = true }
 [[bench]]
 name = "label"
 harness = false
+
+[[bench]]
+name = "filter"
+harness = false
+
+[[bench]]
+name = "planner"
+harness = false
+
+[[bench]]
+name = "session"
+harness = false
+
+[[bench]]
+name = "enumerate_synth"
+harness = false

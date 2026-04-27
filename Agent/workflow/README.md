@@ -29,7 +29,18 @@ On the [status board in `10-milestones.md`](10-milestones.md#status-board-live):
 (overlay pre-warm / D2) are **Done** in code. Phase **D** items **D3** (parallel HWND
 subtrees) and **D4** (partial overlay repaint) are also in-tree — see
 [`04-build-order.md`](04-build-order.md) Phase D **Implemented** bullets. Phase D
-**exit** metrics (P95 on the reference set) and Phase **E** fallbacks are still open.
+**exit** metrics (P95 on the reference set) remain to be proven on the reference
+machine.
+
+Phase **E** — **E1** (MSAA) and **E2** (raw HWND) fallback enumerators and invoke
+dispatch are **in tree** (`nav-uia::fallback_*`, `FallbackPolicy::Auto`). Per-step
+time budgets, tray diagnostics, and coverage matrix gates are **not** done. **E3–E5**
+(multi-monitor/DPI polish, tray + reload, release artifacts) are still open.
+
+**Configuration** — `crates/nav-config` exists with an **`[hints]`** subset
+(alphabet, `max_elements`), **`--config`**, and **`--print-config`** in `navigator`.
+Discovery (`%APPDATA%`, exe-dir), hot reload, and the full schema in
+[`13-configuration.md`](13-configuration.md) are **future / M10**.
 
 ---
 

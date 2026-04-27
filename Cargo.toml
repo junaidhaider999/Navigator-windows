@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/nav-core",
+    "crates/nav-config",
     "crates/nav-bench",
     "crates/nav-input",
     "crates/nav-uia",
@@ -18,6 +19,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 # Internal (add path crates as they land; see Agent/workflow/02-folder-structure.md)
 nav-core = { path = "crates/nav-core" }
+nav-config = { path = "crates/nav-config" }
 nav-input = { path = "crates/nav-input" }
 nav-uia = { path = "crates/nav-uia" }
 nav-render = { path = "crates/nav-render" }

@@ -26,12 +26,14 @@ contributors.
   `rustfmt.toml`, `clippy.toml`, `deny.toml`.
 - New `.gitignore` (Rust-shaped). Old `.gitignore` archived under
   `legacy/`.
-- `.github/workflows/ci.yml`: fmt + clippy + `cargo deny check` + tests on
-  Linux + Windows runners.
+- `.github/workflows/ci.yml`: fmt + clippy + tests + **`cargo bench -p nav-bench
+  -- --quick`** + `cargo deny check` on a **Windows** runner (`windows-latest`).
+  *(Earlier drafts used a Linux runner; the current tree is Windows-only until
+  cross-platform crates are split out.)*
 - `legacy/` exists; old `src/` moved verbatim (see `11-legacy-migration.md`).
 
-**Demo:** PR template merge runs CI green on both runners. `cargo build
---workspace` is a no-op (no crates yet).
+**Demo:** PR merge runs CI green on the Windows workflow. `cargo build
+--workspace` succeeds.
 
 **Gate:** CI green. Single PowerShell command `cargo check --workspace`
 returns exit 0 in < 5 s on a stock laptop.
@@ -246,6 +248,13 @@ hotkey works on each, hints appear at correct sizes.
 
 **Theme:** Reliability beats coverage.
 
+**Repo status:** **Partial.** **E1/E2** are implemented: `nav-uia::fallback_msaa`
+and `nav-uia::fallback_hwnd`, `FallbackPolicy` (`Auto` / `UiaOnly` / `MsaaOnly`),
+enumerate ladder when UIA yields no rows, and **invoke** routed by hint `Backend`
+(UIA vs MSAA `accDoDefaultAction` vs raw HWND center click). **Not** in tree yet:
+per-step time budgets (25 / 8 / 5 ms), tray “Diagnose” UIA dump, and the
+1000-trigger / matrix gates below as automated checks.
+
 **Scope:**
 - `nav-uia::fallback_msaa` — `IAccessible` enumerator.
 - `nav-uia::fallback_hwnd` — `EnumChildWindows` walker + `SendInput`
@@ -267,6 +276,12 @@ builds; MSAA covers it). An older MFC test fixture also gets hints.
 ## M10 — Configuration + tray (2 days)
 
 **Theme:** Users can change the things they care about.
+
+**Repo status:** **Partial (foundation).** Crate `nav-config` loads TOML with a
+minimal **`[hints]`** section (`alphabet`, `max_elements`; built-in defaults match
+legacy: alphabet `"sadfjklewcmpgh"`, **2048** max elements). `navigator` supports
+`--config <path>` and `--print-config`. Full schema, discovery order, `--reset-config`,
+and tray UI are still **TODO** (see `13-configuration.md`).
 
 **Scope:**
 - `nav-config` full schema: hotkey, alphabet, font size, colors,
@@ -382,8 +397,8 @@ Engineers update this table as part of each PR.
 | M6  | UIA cache                  | **Done** | —                    | D1: `FindAllBuildCache` + cache request; `FindAll` fallback; invoke cache/current pattern (`04-build-order.md` D1). P95 gates still to bench. |
 | M7  | Pre-warm                   | **Done***| —                    | D2: `Renderer::prewarm()` + overlay thread; *formal cold-start script / P95 gate still manual.* |
 | M8  | Multi-monitor              | TODO     | —                    |       |
-| M9  | Fallbacks                  | TODO     | —                    |       |
-| M10 | Config + tray              | TODO     | —                    |       |
+| M9  | Fallbacks                  | **Partial** | —                 | MSAA + HWND fallback enumerate + invoke in `nav-uia`; time budgets + tray diagnose + automated matrix gates not done. |
+| M10 | Config + tray              | **Partial** | —                 | `nav-config` + `[hints]` + `--config` / `--print-config`; tray, reload, full schema deferred. |
 | M11 | Release                    | TODO     | —                    |       |
 | M12 | Glyph atlas (post-v1)      | TODO     | —                    |       |
 | M13 | Progressive reveal         | TODO     | —                    |       |

@@ -20,6 +20,10 @@ mod coords;
 #[cfg(windows)]
 mod enumerate;
 #[cfg(windows)]
+mod fallback_hwnd;
+#[cfg(windows)]
+mod fallback_msaa;
+#[cfg(windows)]
 mod invoke;
 #[cfg(windows)]
 mod pattern;

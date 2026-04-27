@@ -8,7 +8,7 @@ navigator/
 │   └── workflow/                   # Read README.md first
 ├── crates/                         # All Rust crates live here
 │   ├── nav-core/                   # Pure logic. No Win32. Cross-platform testable.
-│   ├── nav-config/                 # Config file + CLI parsing (planned; not in repo yet).
+│   ├── nav-config/                 # TOML config types + `load()` ([hints] subset today).
 │   ├── nav-uia/                    # UI Automation enumerator + invoker.
 │   ├── nav-input/                  # Hotkey + low-level keyboard hook.
 │   ├── nav-render/                 # Layered window + Direct2D/DComp overlay.
@@ -163,9 +163,9 @@ nav-core/
         └── planner_tests.rs
 ```
 
-**Rule:** `nav-core` compiles on Linux. CI runs `cargo test -p nav-core` on
-Ubuntu *and* Windows. If a contributor adds a Win32 type here, CI breaks, and
-that's the correct outcome.
+**Rule:** `nav-core` compiles on Linux (run `cargo test -p nav-core` locally).
+CI today is **Windows-only** and runs `cargo test --workspace`. If a contributor
+adds a Win32 type under `nav-core`, that is still incorrect — keep this crate OS-agnostic.
 
 ### `crates/nav-config`
 
@@ -173,11 +173,7 @@ that's the correct outcome.
 nav-config/
 ├── Cargo.toml
 └── src/
-    ├── lib.rs
-    ├── schema.rs              # Serde structs for config.toml.
-    ├── defaults.rs            # Defaults + embedded default file.
-    ├── load.rs                # Discovery: env > CLI > %APPDATA%\Navigator > defaults.
-    └── cli.rs                 # clap derive types.
+    └── lib.rs                 # Config / HintsConfig, `load`, `alphabet_chars` (expand toward schema.rs, discovery, etc.).
 ```
 
 ### `crates/nav-uia`
@@ -191,8 +187,8 @@ nav-uia/
     ├── enumerate.rs           # Cached enumeration via TreeWalker + BuildUpdatedCache.
     ├── pattern.rs             # Invoke / Toggle / Select / ExpandCollapse / Value.
     ├── coords.rs              # DPI-aware bounding rect → window-local rect.
-    ├── fallback_msaa.rs       # IAccessible enumerator (M6).
-    ├── fallback_hwnd.rs       # Raw EnumChildWindows walker (M6).
+    ├── fallback_msaa.rs       # IAccessible enumerator (Phase E).
+    ├── fallback_hwnd.rs       # Raw EnumChildWindows walker (Phase E).
     └── invoke.rs              # Execute action chosen by pattern dispatch.
 ```
 
@@ -232,12 +228,11 @@ nav-app/
 ├── build.rs                   # Embeds icon, manifest, version resource.
 ├── app.manifest               # Per-monitor V2, supportedOS for Win10+.
 └── src/
-    ├── main.rs                # Entry point, single-instance lock, tray.
-    ├── orchestrator.rs        # Owns the session state machine, drives modules.
-    ├── tray.rs                # Notification icon, context menu.
+    ├── main.rs                # Entry point; session loop + UIA/render wiring (orchestrator lives here for now).
     ├── single_instance.rs     # Named-mutex guard.
-    └── logging.rs             # tracing subscriber + ETW provider.
+    └── logging.rs             # tracing subscriber.
 ```
+*(Tray module and split `orchestrator.rs` are roadmap — see `10-milestones.md` M10.)*
 
 ### `crates/nav-bench`
 
@@ -247,12 +242,14 @@ nav-bench/
 └── benches/
     ├── label.rs               # Criterion: label generation throughput.
     ├── filter.rs              # Criterion: prefix filter throughput.
-    ├── enumerate_synthetic.rs # Synthetic UIA tree (mockable).
-    └── enumerate_real.rs      # Drives a fixture WinForms app (Windows-only).
+    ├── planner.rs             # Criterion: planner + labels.
+    ├── session.rs             # Criterion: Session::key hot path.
+    └── enumerate_synth.rs     # dedupe + plan on synthetic RawHints (no COM).
 ```
 
-Synthetic benches run on Linux CI (sanity). Real benches run only on Windows
-CI runners.
+`enumerate_real` (fixture Win32 apps) is not in-tree yet. **Level 1** benches are
+pure Rust and can run on any host; **CI** runs `cargo bench -p nav-bench -- --quick`
+on Windows.
 
 ## Files explicitly removed from `legacy/` migration
 

@@ -2,7 +2,7 @@
 
 use std::sync::Mutex;
 
-use nav_core::{Hint, NavEnumerateResult};
+use nav_core::{Backend, Hint, NavEnumerateResult};
 use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -11,13 +11,17 @@ use windows::Win32::System::Com::{
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, CUIAutomation8, IUIAutomation, IUIAutomationCacheRequest, IUIAutomationCondition,
 };
+use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 use crate::UiaError;
 use crate::cache::{
     create_enumeration_cache_request, create_invoke_findall_cache_request,
     create_invoke_targets_find_condition,
 };
+use crate::click::left_click_rect_center;
 use crate::enumerate::enumerate_baseline;
+use crate::fallback_hwnd::enumerate_raw_hwnd;
+use crate::fallback_msaa::{enumerate_msaa, invoke_msaa_at};
 use crate::hwnd::UiaHwnd;
 use crate::invoke::invoke_invoke_pattern;
 use crate::options::{EnumOptions, FallbackPolicy};
@@ -136,13 +140,35 @@ impl UiaRuntime {
         hwnd: UiaHwnd,
         opts: &EnumOptions,
     ) -> Result<NavEnumerateResult, UiaError> {
-        if opts.fallback == FallbackPolicy::MsaaOnly {
-            return Err(UiaError::UnsupportedConfiguration(
-                "MsaaOnly is not implemented in the B3 baseline",
-            ));
+        match opts.fallback {
+            FallbackPolicy::MsaaOnly => Ok(NavEnumerateResult {
+                hints: enumerate_msaa(hwnd, opts)?,
+                debug_rejects: Vec::new(),
+            }),
+            FallbackPolicy::UiaOnly => {
+                let find_cond = self.find_descendants_condition(opts)?;
+                enumerate_baseline(&self.automation, hwnd, opts, &self.enum_cache, &find_cond)
+            }
+            FallbackPolicy::Auto => {
+                let find_cond = self.find_descendants_condition(opts)?;
+                let r =
+                    enumerate_baseline(&self.automation, hwnd, opts, &self.enum_cache, &find_cond)?;
+                if !r.hints.is_empty() {
+                    return Ok(r);
+                }
+                let msaa = enumerate_msaa(hwnd, opts)?;
+                if !msaa.is_empty() {
+                    return Ok(NavEnumerateResult {
+                        hints: msaa,
+                        debug_rejects: r.debug_rejects,
+                    });
+                }
+                Ok(NavEnumerateResult {
+                    hints: enumerate_raw_hwnd(hwnd, opts)?,
+                    debug_rejects: r.debug_rejects,
+                })
+            }
         }
-        let find_cond = self.find_descendants_condition(opts)?;
-        enumerate_baseline(&self.automation, hwnd, opts, &self.enum_cache, &find_cond)
     }
 
     /// Pattern dispatch: `Invoke` on the element located at the same `FindAll` index as enumeration.
@@ -150,14 +176,22 @@ impl UiaRuntime {
     /// `opts` must match the [`EnumOptions`] used for the preceding [`UiaRuntime::enumerate`] call
     /// so descendant filtering stays consistent with `element_id`.
     pub fn invoke(&self, hwnd: UiaHwnd, hint: &Hint, opts: &EnumOptions) -> Result<(), UiaError> {
-        let find_cond = self.find_descendants_condition(opts)?;
-        invoke_invoke_pattern(
-            &self.automation,
-            hwnd,
-            hint,
-            &self.invoke_find_cache,
-            &find_cond,
-        )
+        match hint.raw.backend {
+            Backend::Uia => {
+                let find_cond = self.find_descendants_condition(opts)?;
+                invoke_invoke_pattern(
+                    &self.automation,
+                    hwnd,
+                    hint,
+                    &self.invoke_find_cache,
+                    &find_cond,
+                )
+            }
+            Backend::Msaa => unsafe {
+                invoke_msaa_at(hwnd, hint.raw.element_id, GetForegroundWindow(), opts)
+            },
+            Backend::RawHwnd => left_click_rect_center(&hint.raw.bounds),
+        }
     }
 }
 

@@ -16,10 +16,12 @@ dependency.
 | `nav-bench filter`            | Prefix filter over 1024 hints, varying prefix len | ≤ 1500 ns / 1024 hints    |
 | `nav-bench session`           | `Session::key` hot path                            | ≤ 800 ns                  |
 | `nav-bench planner`           | Planner ranking + label assignment, N=1024        | ≤ 12 µs                   |
-| `nav-bench enumerate_synth`   | Synthetic UIA tree walker, N=1024 (mock COM)      | ≤ 200 µs                  |
+| `nav-bench enumerate_synth`   | `dedupe_raw_hints` + `plan` on synthetic `RawHint` lists (no COM), N ∈ {256, 1024} | ≤ 200 µs (informal; tighten when baselined) |
 
-These run on **both** Linux and Windows CI. They form the default
-regression gate that blocks merges.
+These run on **Windows CI** (`.github/workflows/ci.yml`: `cargo bench -p
+nav-bench -- --quick`). There is no Linux job in the current workflow; `nav-core`
+micro-benches are still pure Rust and can be run locally on Linux. They form the
+default regression gate that blocks merges.
 
 ### Level 2: macro (`nav-bench enumerate_real`, manual + nightly)
 
@@ -157,8 +159,9 @@ loop for Levels 2 & 3. Both write JSON to `target/bench-results/`.
 1. Every PR that touches `nav-uia`, `nav-render`, `nav-input`, or
    `nav-core` must run Level 1 benches and post the diff in the PR
    description.
-2. CI automatically diffs against the `main` baseline using
-   `criterion-compare` (or our own diff script).
+2. CI runs `cargo bench -p nav-bench -- --quick` (compile + smoke timings).
+   **Automated** P95 diff vs `main` (`criterion-compare` or a custom script) is
+   not wired yet — track regressions manually in the PR until that lands.
 3. Any P95 regression > 5 % blocks merge unless the PR description
    explicitly accepts the trade-off and a maintainer sign-off agrees.
 4. Level 2 benches run nightly. A regression there opens a P0 issue.

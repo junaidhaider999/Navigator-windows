@@ -21,8 +21,9 @@
 ['s', 'a', 'd', 'f', 'j', 'k', 'l', 'e', 'w', 'c', 'm', 'p', 'g', 'h']
 ```
 
-14 characters. Same as legacy HAP. The **`navigator`** binary currently embeds
-this alphabet as a `Vec<char>` for `nav-core::plan` (until `nav-config` exists).
+14 characters. Same as legacy HAP. The **`navigator`** binary loads the hint
+alphabet from **`nav-config`** (`alphabet_chars` after `nav_config::load`), which
+defaults to this string when no config file is passed.
 Properties:
 
 - All home-row first (`s a d f j k l`), then near-row.

@@ -14,6 +14,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Criterion micro-benches (quick mode)
+        run: cargo bench -p nav-bench -- --quick
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
