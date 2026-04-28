@@ -69,7 +69,11 @@ fn default_materialize_budget_ms() -> u64 {
 }
 
 fn default_hint_cache_ttl_ms() -> u64 {
-    500
+    1000
+}
+
+fn default_planner_label_cap() -> usize {
+    60
 }
 
 fn default_pipeline_soft_budget_ms() -> u64 {
@@ -110,6 +114,9 @@ pub struct HintsConfig {
     /// Hard ceiling for `[pipeline]` diagnostics (enumeration may still return partial results earlier).
     #[serde(default = "default_pipeline_hard_budget_ms")]
     pub pipeline_hard_budget_ms: u64,
+    /// Max hints passed to the planner after priority ranking (`0` = no extra cap beyond enumeration).
+    #[serde(default = "default_planner_label_cap")]
+    pub planner_label_cap: usize,
 }
 
 impl Default for HintsConfig {
@@ -123,6 +130,7 @@ impl Default for HintsConfig {
             hint_cache_ttl_ms: default_hint_cache_ttl_ms(),
             pipeline_soft_budget_ms: default_pipeline_soft_budget_ms(),
             pipeline_hard_budget_ms: default_pipeline_hard_budget_ms(),
+            planner_label_cap: default_planner_label_cap(),
         }
     }
 }
@@ -317,6 +325,7 @@ mod tests {
             parsed.hints.pipeline_hard_budget_ms,
             def.hints.pipeline_hard_budget_ms
         );
+        assert_eq!(parsed.hints.planner_label_cap, def.hints.planner_label_cap);
         assert_eq!(parsed.hotkey.chord, def.hotkey.chord);
         assert_eq!(parsed.fallback.budget_ms.uia, def.fallback.budget_ms.uia);
         assert_eq!(parsed.render.debug_connectors, def.render.debug_connectors);
