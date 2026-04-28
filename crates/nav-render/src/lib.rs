@@ -16,12 +16,25 @@ mod overlay;
 mod scene;
 
 #[cfg(windows)]
-use std::thread::JoinHandle;
-
-#[cfg(windows)]
 use crossbeam_channel::{Sender, unbounded};
 #[cfg(windows)]
 use nav_core::{Hint, UiaDebugReject};
+
+#[cfg(windows)]
+use std::thread::JoinHandle;
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OverlayRenderOpts {
+    /// Pill center → invoke anchor connector lines.
+    pub debug_connectors: bool,
+    /// Red dot at resolved invoke anchor (physical→DIP mapped).
+    pub debug_target_dot: bool,
+    /// Green outline around element bounds.
+    pub debug_target_rect: bool,
+    /// Numeric distance (pill center to anchor, DIPs).
+    pub debug_distance: bool,
+}
 
 /// Owns the render worker thread and sends [`overlay::RenderCmd`] commands.
 #[cfg(windows)]
@@ -67,14 +80,14 @@ impl Renderer {
         session_id: u64,
         hints: &[Hint],
         debug_rejects: &[UiaDebugReject],
-        debug_connectors: bool,
+        opts: OverlayRenderOpts,
     ) -> Result<(), RenderError> {
         self.cmd
             .send(overlay::RenderCmd::Show {
                 session_id,
                 hints: hints.to_vec(),
                 debug_rejects: debug_rejects.to_vec(),
-                debug_connectors,
+                opts,
             })
             .map_err(|_| RenderError::Disconnected)
     }
@@ -91,14 +104,14 @@ impl Renderer {
         session_id: u64,
         hints: &[Hint],
         debug_rejects: &[UiaDebugReject],
-        debug_connectors: bool,
+        opts: OverlayRenderOpts,
     ) -> Result<(), RenderError> {
         self.cmd
             .send(overlay::RenderCmd::Repaint {
                 session_id,
                 hints: hints.to_vec(),
                 debug_rejects: debug_rejects.to_vec(),
-                debug_connectors,
+                opts,
             })
             .map_err(|_| RenderError::Disconnected)
     }

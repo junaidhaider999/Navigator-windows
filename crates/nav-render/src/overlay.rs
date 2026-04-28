@@ -21,6 +21,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, w};
 
 use crate::RenderError;
+use crate::OverlayRenderOpts;
 use crate::d2d::D2dCompositionRenderer;
 use crate::monitors::{enumerate_monitor_rects, physical_point_in_monitor_rect};
 
@@ -33,14 +34,13 @@ pub(crate) enum RenderCmd {
         session_id: u64,
         hints: Vec<Hint>,
         debug_rejects: Vec<UiaDebugReject>,
-        /// Pill center to element bbox lines (same flag as UIA `--debug-overlay`).
-        debug_connectors: bool,
+        opts: OverlayRenderOpts,
     },
     Repaint {
         session_id: u64,
         hints: Vec<Hint>,
         debug_rejects: Vec<UiaDebugReject>,
-        debug_connectors: bool,
+        opts: OverlayRenderOpts,
     },
     Hide {
         session_id: u64,
@@ -264,14 +264,14 @@ struct LastPainted {
     session_id: u64,
     hints: Vec<Hint>,
     debug_rejects: Vec<UiaDebugReject>,
-    debug_connectors: bool,
+    opts: OverlayRenderOpts,
 }
 
 unsafe fn present_partitioned(
     st: &mut OverlayStack,
     hints: &[Hint],
     debug_rejects: &[UiaDebugReject],
-    debug_connectors: bool,
+    opts: OverlayRenderOpts,
 ) -> Result<(), RenderError> {
     st.sync_to_monitors()?;
     if st.slots.is_empty() {
@@ -282,7 +282,7 @@ unsafe fn present_partitioned(
     let dbg_parts = partition_debug_rejects(debug_rejects, &monitors);
     for ((s, part), dpart) in st.slots.iter_mut().zip(parts.iter()).zip(dbg_parts.iter()) {
         if let Some(ref mut g) = s.gpu {
-            g.update_and_present(part, dpart, debug_connectors)?;
+            g.update_and_present(part, dpart, opts)?;
         }
         if part.is_empty() && dpart.is_empty() {
             let _ = ShowWindow(s.hwnd, SW_HIDE);
@@ -323,7 +323,11 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     st.sync_to_monitors()?;
                     for s in &mut st.slots {
                         if let Some(ref mut g) = s.gpu {
-                            g.update_and_present(&[], &[], false)?;
+                            g.update_and_present(
+                                &[],
+                                &[],
+                                crate::OverlayRenderOpts::default(),
+                            )?;
                         }
                         let _ = ShowWindow(s.hwnd, SW_HIDE);
                         s.visible = false;
@@ -339,7 +343,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                 session_id,
                 hints,
                 debug_rejects,
-                debug_connectors,
+                opts,
             } => {
                 if session_id <= max_show_accepted {
                     if let Some(ref st) = stack {
@@ -352,7 +356,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                         stack = Some(OverlayStack::new()?);
                     }
                     let st = stack.as_mut().unwrap();
-                    present_partitioned(st, &hints, &debug_rejects, debug_connectors)
+                    present_partitioned(st, &hints, &debug_rejects, opts)
                 })();
                 match res {
                     Ok(()) => {
@@ -362,7 +366,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                             session_id,
                             hints,
                             debug_rejects,
-                            debug_connectors,
+                            opts,
                         });
                     }
                     Err(e) => eprintln!("[render] show failed: {e}"),
@@ -372,7 +376,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                 session_id,
                 hints,
                 debug_rejects,
-                debug_connectors,
+                opts,
             } => {
                 if displayed_session != Some(session_id) {
                     if let Some(ref st) = stack {
@@ -384,7 +388,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     let st = stack.as_mut().ok_or_else(|| {
                         RenderError::Win32("repaint with no overlay stack".into())
                     })?;
-                    present_partitioned(st, &hints, &debug_rejects, debug_connectors)
+                    present_partitioned(st, &hints, &debug_rejects, opts)
                 })();
                 match res {
                     Ok(()) => {
@@ -392,7 +396,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                             session_id,
                             hints,
                             debug_rejects,
-                            debug_connectors,
+                            opts,
                         });
                     }
                     Err(e) => eprintln!("[render] repaint: {e}"),
@@ -422,7 +426,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                                 st,
                                 &lp.hints,
                                 &lp.debug_rejects,
-                                lp.debug_connectors,
+                                lp.opts,
                             )?;
                             return Ok(());
                         }

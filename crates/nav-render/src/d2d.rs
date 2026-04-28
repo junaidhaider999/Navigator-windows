@@ -26,7 +26,7 @@ use windows::Win32::Graphics::DirectComposition::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT_NORMAL, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
+    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
@@ -44,6 +44,7 @@ use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
 use windows::core::{Interface, w};
 
 use crate::RenderError;
+use crate::OverlayRenderOpts;
 use crate::scene::{self, DebugRegionGeom, PillGeom};
 
 const FRAME_BUDGET: Duration = Duration::from_millis(4);
@@ -71,12 +72,15 @@ pub struct D2dCompositionRenderer {
     pill_text: ID2D1SolidColorBrush,
     debug_fill: ID2D1SolidColorBrush,
     pill_connector: ID2D1SolidColorBrush,
+    truth_dot: ID2D1SolidColorBrush,
+    truth_bounds: ID2D1SolidColorBrush,
     /// `Present(0, ALLOW_TEARING)` is only valid when the swap chain was created with
     /// [`DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING`] after a successful factory check.
     present_allow_tearing: bool,
     swap_chain_flags: DXGI_SWAP_CHAIN_FLAG,
     last_pills: Vec<PillGeom>,
     last_debug: Vec<DebugRegionGeom>,
+    last_overlay_opts: OverlayRenderOpts,
 }
 
 impl D2dCompositionRenderer {
@@ -200,7 +204,7 @@ impl D2dCompositionRenderer {
             .CreateTextFormat(
                 w!("Segoe UI"),
                 None,
-                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_WEIGHT_SEMI_BOLD,
                 DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL,
                 scene::PILL_FONT_EM_DIPS,
@@ -239,6 +243,12 @@ impl D2dCompositionRenderer {
         let pill_connector = d2d_ctx
             .CreateSolidColorBrush(&scene::pill_connector_color(), None)
             .map_err(|e| RenderError::Win32(e.to_string()))?;
+        let truth_dot = d2d_ctx
+            .CreateSolidColorBrush(&scene::placement_truth_dot_color(), None)
+            .map_err(|e| RenderError::Win32(e.to_string()))?;
+        let truth_bounds = d2d_ctx
+            .CreateSolidColorBrush(&scene::placement_truth_bounds_color(), None)
+            .map_err(|e| RenderError::Win32(e.to_string()))?;
 
         let origin = window_origin_phys(hwnd)?;
         let last_pills = scene::pills_for_frame(
@@ -271,10 +281,13 @@ impl D2dCompositionRenderer {
             pill_text,
             debug_fill,
             pill_connector,
+            truth_dot,
+            truth_bounds,
             present_allow_tearing,
             swap_chain_flags,
             last_pills,
             last_debug: Vec::new(),
+            last_overlay_opts: OverlayRenderOpts::default(),
         })
     }
 
@@ -324,7 +337,7 @@ impl D2dCompositionRenderer {
         &mut self,
         hints: &[Hint],
         debug_rejects: &[UiaDebugReject],
-        debug_connectors: bool,
+        opts: OverlayRenderOpts,
     ) -> Result<Duration, RenderError> {
         let t0 = Instant::now();
         self.sync_size_and_dpi()?;
@@ -332,7 +345,7 @@ impl D2dCompositionRenderer {
         let cw = client_w_dips(self.pixel_w, self.dpi);
         let ch = client_h_dips(self.pixel_h, self.dpi);
         let origin = window_origin_phys(self.hwnd)?;
-        let new_pills = scene::pills_for_frame(hints, origin, cw, ch, self.dpi, debug_connectors);
+        let new_pills = scene::pills_for_frame(hints, origin, cw, ch, self.dpi, opts.debug_connectors);
         let new_debug = scene::debug_regions_for_frame(debug_rejects, origin, cw, ch, self.dpi);
         if matches!(
             scene::overlay_paint_plan(
@@ -344,7 +357,8 @@ impl D2dCompositionRenderer {
                 ch,
             ),
             scene::PaintPlan::NoOp
-        ) {
+        ) && opts == self.last_overlay_opts
+        {
             self.last_pills = new_pills;
             self.last_debug = new_debug;
             return Ok(t0.elapsed());
@@ -383,12 +397,31 @@ impl D2dCompositionRenderer {
 
         self.d2d_ctx.Clear(Some(&clear));
         scene::draw_debug_regions(&self.d2d_ctx, &new_debug, &self.debug_fill)?;
-        scene::draw_pill_connectors(
+        let truth = scene::PlacementTruthFlags {
+            target_dot: opts.debug_target_dot,
+            target_rect: opts.debug_target_rect,
+            distance: opts.debug_distance,
+        };
+        scene::draw_placement_truth(
             &self.d2d_ctx,
             &new_pills,
+            &self.truth_dot,
+            &self.truth_bounds,
+            &self.text_format,
+            &self.write,
+            &self.pill_text,
             &self.stroke,
-            &self.pill_connector,
+            truth,
         )?;
+        if opts.debug_connectors {
+            scene::draw_pill_connectors(
+                &self.d2d_ctx,
+                &new_pills,
+                &self.stroke,
+                &self.pill_connector,
+                true,
+            )?;
+        }
         scene::draw_pills(
             &self.d2d_ctx,
             &self.text_format,
@@ -402,6 +435,7 @@ impl D2dCompositionRenderer {
 
         self.last_pills = new_pills;
         self.last_debug = new_debug;
+        self.last_overlay_opts = opts;
 
         self.d2d_ctx
             .EndDraw(None, None)

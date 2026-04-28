@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use nav_core::{Hint, UiaDebugReject};
+use nav_core::{Hint, Rect, UiaDebugReject, fallback_anchor_px};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_POINT_2F, D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_DRAW_TEXT_OPTIONS_CLIP,
@@ -14,8 +14,8 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1SolidColorBrush, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, IDWriteFactory,
-    IDWriteTextFormat,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_LEADING, IDWriteFactory, IDWriteTextFormat,
 };
 use windows::core::Interface;
 
@@ -28,8 +28,12 @@ pub struct PillGeom {
     pub label: String,
     /// Multiplier for pill fill/border/text brush opacity (`1.0` = full strength).
     pub opacity: f32,
-    /// When connector drawing is enabled: pill center → backing element bbox
+    /// When set (debug only): pill center → invoke anchor (truth point) for connector drawing.
     pub debug_connector: Option<(D2D_POINT_2F, D2D_POINT_2F)>,
+    /// Resolved invoke anchor in overlay client DIPs (matches [`nav_core::RawHint::anchor_px`] mapping).
+    pub anchor_client_dip: D2D_POINT_2F,
+    /// Element bounds in client DIPs (UIA bbox mapped into overlay space).
+    pub target_bounds_client_dip: D2D_RECT_F,
 }
 
 /// Semi-transparent debug rectangle (rejected UIA candidate) in client DIPs.
@@ -91,23 +95,52 @@ pub fn pills_geometrically_equal(a: &[PillGeom], b: &[PillGeom]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    type V = (D2D_RECT_F, f32, Option<(D2D_POINT_2F, D2D_POINT_2F)>);
+    type V = (
+        D2D_RECT_F,
+        f32,
+        Option<(D2D_POINT_2F, D2D_POINT_2F)>,
+        D2D_POINT_2F,
+        D2D_RECT_F,
+    );
     let mut ma: HashMap<&str, V> = HashMap::with_capacity(a.len());
     for p in a {
-        ma.insert(p.label.as_str(), (p.rect, p.opacity, p.debug_connector));
+        ma.insert(
+            p.label.as_str(),
+            (
+                p.rect,
+                p.opacity,
+                p.debug_connector,
+                p.anchor_client_dip,
+                p.target_bounds_client_dip,
+            ),
+        );
     }
     let mut mb: HashMap<&str, V> = HashMap::with_capacity(b.len());
     for p in b {
-        mb.insert(p.label.as_str(), (p.rect, p.opacity, p.debug_connector));
+        mb.insert(
+            p.label.as_str(),
+            (
+                p.rect,
+                p.opacity,
+                p.debug_connector,
+                p.anchor_client_dip,
+                p.target_bounds_client_dip,
+            ),
+        );
     }
     if ma.len() != mb.len() {
         return false;
     }
-    for (k, (r_a, o_a, c_a)) in &ma {
-        let Some((r_b, o_b, c_b)) = mb.get(k) else {
+    for (k, (r_a, o_a, c_a, aa, ta)) in &ma {
+        let Some((r_b, o_b, c_b, ab, tb)) = mb.get(k) else {
             return false;
         };
-        if !(rects_equal(*r_a, *r_b) && opacity_equal(*o_a, *o_b) && connector_equal(*c_a, *c_b)) {
+        if !(rects_equal(*r_a, *r_b)
+            && opacity_equal(*o_a, *o_b)
+            && connector_equal(*c_a, *c_b)
+            && points_equal(*aa, *ab)
+            && rects_equal(*ta, *tb))
+        {
             return false;
         }
     }
@@ -148,29 +181,33 @@ pub fn overlay_paint_plan(
 }
 
 /// Em height (DIPs) for hint labels; must match `CreateTextFormat` in `d2d::D2dCompositionRenderer::new`.
-pub const PILL_FONT_EM_DIPS: f32 = 15.0;
-const PILL_PAD_X: f32 = 8.0;
-const PILL_PAD_Y: f32 = 5.0;
-/// Nudge pill slightly outside the element top-left anchor.
-const PILL_OUTSET: f32 = 2.0;
+pub const PILL_FONT_EM_DIPS: f32 = 11.5;
+const PILL_PAD_X: f32 = 4.5;
+const PILL_PAD_Y: f32 = 2.5;
+/// Tight gap between invoke anchor and pill (4–6 px DIPs; locality over polish).
+const PLACE_GAP_DIPS: f32 = 5.0;
+/// Minimum inset from overlay edges — pills are translated to fit; never squashed (avoids clipped labels).
+const CLIENT_MARGIN_DIPS: f32 = 8.0;
+/// Minimum padding when placing inside the target rect.
+const INSIDE_INSET_DIPS: f32 = 4.0;
+
 /// Rough average Latin glyph width at [`PILL_FONT_EM_DIPS`] (layout estimate, not shaped text).
-const PILL_CHAR_W_EST: f32 = 7.4;
-const PILL_MIN_W: f32 = 22.0;
-const PILL_MIN_H: f32 = 20.0;
-const PILL_MAX_W: f32 = 280.0;
+const PILL_CHAR_W_EST: f32 = 6.0;
+const PILL_MAX_W: f32 = 220.0;
 
 fn estimate_label_width_dips(label: &str) -> f32 {
     let n = label.chars().count().max(1) as f32;
-    (n * PILL_CHAR_W_EST).max(10.0)
+    n * PILL_CHAR_W_EST
 }
 
 fn pill_size_for_label(label: &str) -> (f32, f32) {
     let tw = estimate_label_width_dips(label);
-    let pw = (PILL_PAD_X.mul_add(2.0, tw)).clamp(PILL_MIN_W, PILL_MAX_W);
-    let ph = (PILL_PAD_Y.mul_add(2.0, PILL_FONT_EM_DIPS * 1.15)).max(PILL_MIN_H);
+    let pw = PILL_PAD_X.mul_add(2.0, tw).min(PILL_MAX_W);
+    let ph = PILL_PAD_Y.mul_add(2.0, PILL_FONT_EM_DIPS * 1.06);
     (pw, ph)
 }
 
+#[cfg(test)]
 fn rects_overlap(a: &D2D_RECT_F, b: &D2D_RECT_F) -> bool {
     a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
 }
@@ -194,6 +231,294 @@ fn overlap_penalty_with_placed(r: &D2D_RECT_F, placed: &[PillGeom]) -> f32 {
         .sum()
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum PlacementKind {
+    Outside,
+    Inside,
+}
+
+fn pill_center(r: &D2D_RECT_F) -> D2D_POINT_2F {
+    D2D_POINT_2F {
+        x: (r.left + r.right) * 0.5,
+        y: (r.top + r.bottom) * 0.5,
+    }
+}
+
+fn distance_points(a: D2D_POINT_2F, b: D2D_POINT_2F) -> f32 {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    (dx * dx + dy * dy).sqrt()
+}
+
+/// Hard locality budget from physical bbox size (returns DIPs — consistent overlay units).
+fn max_anchor_distance_dip(bounds_phys_w: i32, bounds_phys_h: i32) -> f32 {
+    let m = bounds_phys_w.max(bounds_phys_h).max(1);
+    if m <= 32 {
+        24.0
+    } else if m <= 96 {
+        32.0
+    } else {
+        40.0
+    }
+}
+
+fn clamp_anchor_px(x: i32, y: i32, r: &Rect) -> (i32, i32) {
+    if r.w <= 0 || r.h <= 0 {
+        return (r.x, r.y);
+    }
+    let max_x = r.x.saturating_add(r.w.saturating_sub(1));
+    let max_y = r.y.saturating_add(r.h.saturating_sub(1));
+    (x.clamp(r.x, max_x), y.clamp(r.y, max_y))
+}
+
+fn resolve_hint_anchor_phys(h: &Hint) -> (i32, i32) {
+    let b = h.raw.bounds;
+    let (x, y) = h
+        .raw
+        .anchor_px
+        .unwrap_or_else(|| fallback_anchor_px(b, h.raw.kind));
+    clamp_anchor_px(x, y, &b)
+}
+
+fn phys_to_client_dip(px: i32, py: i32, ox: i32, oy: i32, scale: f32) -> D2D_POINT_2F {
+    D2D_POINT_2F {
+        x: (px - ox) as f32 * scale,
+        y: (py - oy) as f32 * scale,
+    }
+}
+
+fn rect_fully_inside(inner: &D2D_RECT_F, outer: &D2D_RECT_F) -> bool {
+    inner.left >= outer.left
+        && inner.top >= outer.top
+        && inner.right <= outer.right
+        && inner.bottom <= outer.bottom
+}
+
+/// Translate-only fit inside `[margin, cw-margin] × [margin, ch-margin]` without changing size.
+fn fit_rect_in_client_margins(
+    left: f32,
+    top: f32,
+    pw: f32,
+    ph: f32,
+    cw: f32,
+    ch: f32,
+    margin: f32,
+) -> Option<D2D_RECT_F> {
+    if !(pw > 0.0 && ph > 0.0 && cw > 0.0 && ch > 0.0) {
+        return None;
+    }
+    if pw > cw - 2.0 * margin || ph > ch - 2.0 * margin {
+        return None;
+    }
+    let max_l = cw - margin - pw;
+    let max_t = ch - margin - ph;
+    let left = left.clamp(margin, max_l);
+    let top = top.clamp(margin, max_t);
+    Some(D2D_RECT_F {
+        left,
+        top,
+        right: left + pw,
+        bottom: top + ph,
+    })
+}
+
+fn inside_anchor(
+    el_left: f32,
+    el_top: f32,
+    el_w: f32,
+    el_h: f32,
+    pw: f32,
+    ph: f32,
+) -> Option<(f32, f32)> {
+    let inner_w = el_w - 2.0 * INSIDE_INSET_DIPS;
+    let inner_h = el_h - 2.0 * INSIDE_INSET_DIPS;
+    if inner_w < pw || inner_h < ph {
+        return None;
+    }
+    let left = el_left + INSIDE_INSET_DIPS + (inner_w - pw) * 0.5;
+    let top = el_top + INSIDE_INSET_DIPS + (inner_h - ph) * 0.5;
+    Some((left, top))
+}
+
+/// Anchors around invoke point (TR, TL, BR, BL, R, L, inside bbox).
+fn anchor_placement_candidates(
+    ax: f32,
+    ay: f32,
+    pw: f32,
+    ph: f32,
+    gap: f32,
+    target: &D2D_RECT_F,
+) -> Vec<(PlacementKind, f32, f32)> {
+    let el_left = target.left;
+    let el_top = target.top;
+    let el_w = target.right - target.left;
+    let el_h = target.bottom - target.top;
+    let mut v = Vec::with_capacity(8);
+    v.push((PlacementKind::Outside, ax + gap, ay - gap - ph));
+    v.push((PlacementKind::Outside, ax - gap - pw, ay - gap - ph));
+    v.push((PlacementKind::Outside, ax + gap, ay + gap));
+    v.push((PlacementKind::Outside, ax - gap - pw, ay + gap));
+    v.push((PlacementKind::Outside, ax + gap, ay - ph * 0.5));
+    v.push((PlacementKind::Outside, ax - gap - pw, ay - ph * 0.5));
+    if let Some((l, t)) = inside_anchor(el_left, el_top, el_w, el_h, pw, ph) {
+        v.push((PlacementKind::Inside, l, t));
+    }
+    v
+}
+
+fn local_nudge_offsets() -> &'static [(f32, f32)] {
+    &[
+        (0.0, 0.0),
+        (4.0, 0.0),
+        (-4.0, 0.0),
+        (0.0, 4.0),
+        (0.0, -4.0),
+        (4.0, 4.0),
+        (-4.0, 4.0),
+        (4.0, -4.0),
+        (-4.0, -4.0),
+        (8.0, 0.0),
+        (-8.0, 0.0),
+        (0.0, 8.0),
+        (0.0, -8.0),
+        (8.0, 8.0),
+        (-8.0, 8.0),
+        (8.0, -8.0),
+        (-8.0, -8.0),
+        (10.0, 0.0),
+        (-10.0, 0.0),
+        (0.0, 10.0),
+        (0.0, -10.0),
+    ]
+}
+
+fn score_placement(
+    kind: PlacementKind,
+    r: &D2D_RECT_F,
+    anchor: D2D_POINT_2F,
+    target: &D2D_RECT_F,
+    placed: &[PillGeom],
+    all_anchors: &[D2D_POINT_2F],
+    my_idx: usize,
+    cw: f32,
+    ch: f32,
+    max_dist_dip: f32,
+) -> f32 {
+    let pc = pill_center(r);
+    let dist = distance_points(pc, anchor);
+    let mut score = dist * 1000.0;
+
+    if dist > max_dist_dip {
+        score += (dist - max_dist_dip) * 400.0;
+    }
+
+    score += overlap_penalty_with_placed(r, placed) * 4.0;
+
+    let occ = rect_intersection_area(r, target);
+    score += match kind {
+        PlacementKind::Inside => occ * 0.4,
+        PlacementKind::Outside => occ * 12.0,
+    };
+
+    for (j, oa) in all_anchors.iter().enumerate() {
+        if j == my_idx {
+            continue;
+        }
+        let d_own = distance_points(pc, anchor);
+        let d_other = distance_points(pc, *oa);
+        if d_other + 1.5 < d_own {
+            score += (d_own - d_other) * 600.0;
+        }
+    }
+
+    let min_edge = (r.left - CLIENT_MARGIN_DIPS)
+        .min(r.top - CLIENT_MARGIN_DIPS)
+        .min(cw - CLIENT_MARGIN_DIPS - r.right)
+        .min(ch - CLIENT_MARGIN_DIPS - r.bottom);
+    if min_edge < 3.0 {
+        score += (3.0 - min_edge) * 12.0;
+    }
+
+    score
+}
+
+fn choose_pill_rect(
+    anchor: D2D_POINT_2F,
+    target: &D2D_RECT_F,
+    pw: f32,
+    ph: f32,
+    placed: &[PillGeom],
+    all_anchors: &[D2D_POINT_2F],
+    hint_idx: usize,
+    client_w: f32,
+    client_h: f32,
+    max_dist_dip: f32,
+) -> Option<D2D_RECT_F> {
+    let bases = anchor_placement_candidates(
+        anchor.x,
+        anchor.y,
+        pw,
+        ph,
+        PLACE_GAP_DIPS,
+        target,
+    );
+    let nudges = local_nudge_offsets();
+    let mut best: Option<(f32, D2D_RECT_F)> = None;
+
+    for &(kind, bx, by) in &bases {
+        for &(dx, dy) in nudges {
+            let left = bx + dx;
+            let top = by + dy;
+            let Some(r) = fit_rect_in_client_margins(
+                left,
+                top,
+                pw,
+                ph,
+                client_w,
+                client_h,
+                CLIENT_MARGIN_DIPS,
+            ) else {
+                continue;
+            };
+            if kind == PlacementKind::Inside && !rect_fully_inside(&r, target) {
+                continue;
+            }
+            let s = score_placement(
+                kind,
+                &r,
+                anchor,
+                target,
+                placed,
+                all_anchors,
+                hint_idx,
+                client_w,
+                client_h,
+                max_dist_dip,
+            );
+            best = match best {
+                None => Some((s, r)),
+                Some((bs, br)) => {
+                    if s < bs - 1e-4 {
+                        Some((s, r))
+                    } else if (s - bs).abs() <= 1e-4 {
+                        if distance_points(pill_center(&r), anchor)
+                            < distance_points(pill_center(&br), anchor)
+                        {
+                            Some((s, r))
+                        } else {
+                            Some((bs, br))
+                        }
+                    } else {
+                        Some((bs, br))
+                    }
+                }
+            };
+        }
+    }
+
+    best.map(|(_, r)| r)
+}
+
 fn clamp_pill_to_client(mut r: D2D_RECT_F, client_w: f32, client_h: f32) -> Option<D2D_RECT_F> {
     const MIN_SPAN: f32 = 4.0;
     r.left = r.left.max(0.0);
@@ -205,100 +530,6 @@ fn clamp_pill_to_client(mut r: D2D_RECT_F, client_w: f32, client_h: f32) -> Opti
     } else {
         None
     }
-}
-
-/// Radial / axis offsets around center + corners; denser rings near the element, wider search when crowded.
-fn pill_rect_candidates(
-    el_left: f32,
-    el_top: f32,
-    el_w: f32,
-    el_h: f32,
-    pw: f32,
-    ph: f32,
-) -> Vec<D2D_RECT_F> {
-    let o = PILL_OUTSET;
-    // Prefer center-anchored pills (closer to the clickable hotspot than a corner).
-    let cx = el_left + el_w * 0.5 - pw * 0.5;
-    let cy = el_top + el_h * 0.5 - ph * 0.5;
-    let corners = [
-        (cx, cy),
-        (el_left - o, el_top - o),
-        (el_left + el_w - pw + o, el_top - o),
-        (el_left - o, el_top + el_h - ph + o),
-        (el_left + el_w - pw + o, el_top + el_h - ph + o),
-    ];
-    // More rings + slightly tighter step so dense UIA lists still find a nearby free slot.
-    const RINGS: i32 = 16;
-    const STEP: f32 = 4.0;
-    let mut offs = Vec::with_capacity((RINGS as usize).saturating_mul(8).saturating_add(1));
-    offs.push((0.0f32, 0.0f32));
-    for k in 1_i32..=RINGS {
-        let s = k as f32 * STEP;
-        offs.push((s, 0.0));
-        offs.push((-s, 0.0));
-        offs.push((0.0, s));
-        offs.push((0.0, -s));
-        offs.push((s * 0.75, s * 0.75));
-        offs.push((-s * 0.75, s * 0.75));
-    }
-    let mut out = Vec::with_capacity(corners.len() * offs.len());
-    for (dx, dy) in offs {
-        for (l, t) in corners {
-            let left = l + dx;
-            let top = t + dy;
-            out.push(D2D_RECT_F {
-                left,
-                top,
-                right: left + pw,
-                bottom: top + ph,
-            });
-        }
-    }
-    out
-}
-
-fn choose_pill_rect(
-    el_left: f32,
-    el_top: f32,
-    el_w: f32,
-    el_h: f32,
-    pw: f32,
-    ph: f32,
-    placed: &[PillGeom],
-    client_w: f32,
-    client_h: f32,
-) -> Option<D2D_RECT_F> {
-    let cands = pill_rect_candidates(el_left, el_top, el_w, el_h, pw, ph);
-    let mut best_overlap: Option<(f32, D2D_RECT_F)> = None;
-    for cand in cands {
-        if let Some(r) = clamp_pill_to_client(cand, client_w, client_h) {
-            if placed.iter().all(|p| !rects_overlap(&r, &p.rect)) {
-                return Some(r);
-            }
-            let pen = overlap_penalty_with_placed(&r, placed);
-            best_overlap = match best_overlap {
-                None => Some((pen, r)),
-                Some((best_p, _)) if pen < best_p => Some((pen, r)),
-                Some(prev) => Some(prev),
-            };
-        }
-    }
-    if let Some((_, r)) = best_overlap {
-        return Some(r);
-    }
-    let o = PILL_OUTSET;
-    let l = el_left - o;
-    let t = el_top - o;
-    clamp_pill_to_client(
-        D2D_RECT_F {
-            left: l,
-            top: t,
-            right: l + pw,
-            bottom: t + ph,
-        },
-        client_w,
-        client_h,
-    )
 }
 
 /// `overlay_origin_phys` is the overlay HWND top-left in physical screen pixels (matches UIA bounds).
@@ -347,7 +578,7 @@ fn pill_opacity_from_cluster(score: f32, max_score: f32, n_hints: usize) -> f32 
         return 1.0;
     }
     let t = (score / max_score).clamp(0.0, 1.0);
-    0.48 + 0.52 * t
+    0.88 + 0.12 * t
 }
 
 pub fn pills_for_frame(
@@ -363,6 +594,13 @@ pub fn pills_for_frame(
     }
     let (ox, oy) = overlay_origin_phys;
     let scale = 96.0 / dpi;
+    let anchors_dip: Vec<D2D_POINT_2F> = hints
+        .iter()
+        .map(|h| {
+            let (ax, ay) = resolve_hint_anchor_phys(h);
+            phys_to_client_dip(ax, ay, ox, oy, scale)
+        })
+        .collect();
     let max_score = hints
         .iter()
         .map(|h| h.score)
@@ -387,19 +625,40 @@ pub fn pills_for_frame(
         let el_top = (h.raw.bounds.y - oy) as f32 * scale;
         let el_w = h.raw.bounds.w as f32 * scale;
         let el_h = h.raw.bounds.h as f32 * scale;
+        if el_w <= 0.0 || el_h <= 0.0 || !el_w.is_finite() || !el_h.is_finite() {
+            continue;
+        }
+        let target_bounds = D2D_RECT_F {
+            left: el_left,
+            top: el_top,
+            right: el_left + el_w,
+            bottom: el_top + el_h,
+        };
+        let anchor = anchors_dip[i];
+        let max_d = max_anchor_distance_dip(h.raw.bounds.w, h.raw.bounds.h);
         let (pw, ph) = pill_size_for_label(h.label.as_ref());
         if let Some(rect) = choose_pill_rect(
-            el_left, el_top, el_w, el_h, pw, ph, &placed, client_w, client_h,
+            anchor,
+            &target_bounds,
+            pw,
+            ph,
+            &placed,
+            &anchors_dip,
+            i,
+            client_w,
+            client_h,
+            max_d,
         ) {
             let opacity = pill_opacity_from_cluster(h.score, max_score, hints.len());
-            let el_cx = el_left + el_w * 0.5;
-            let el_cy = el_top + el_h * 0.5;
+            let px = (rect.left + rect.right) * 0.5;
+            let py = (rect.top + rect.bottom) * 0.5;
             let debug_connector = if debug_connectors {
-                let px = (rect.left + rect.right) * 0.5;
-                let py = (rect.top + rect.bottom) * 0.5;
                 Some((
                     D2D_POINT_2F { x: px, y: py },
-                    D2D_POINT_2F { x: el_cx, y: el_cy },
+                    D2D_POINT_2F {
+                        x: anchor.x,
+                        y: anchor.y,
+                    },
                 ))
             } else {
                 None
@@ -409,13 +668,15 @@ pub fn pills_for_frame(
                 label: h.label.to_string(),
                 opacity,
                 debug_connector,
+                anchor_client_dip: anchor,
+                target_bounds_client_dip: target_bounds,
             });
         }
     }
     placed
 }
 
-const CORNER_RADIUS: f32 = 8.0;
+const CORNER_RADIUS: f32 = 3.5;
 
 #[inline]
 unsafe fn solid_brush_set_opacity(
@@ -427,22 +688,27 @@ unsafe fn solid_brush_set_opacity(
     Ok(())
 }
 
-/// Thin lines from pill center to backing element center (diagnostics). Draw before pills.
+/// Thin line pill → element center (always laid out; opacity scales with `emphasized`).
 pub unsafe fn draw_pill_connectors(
     dc: &ID2D1DeviceContext,
     pills: &[PillGeom],
     stroke: &ID2D1StrokeStyle,
     brush: &ID2D1SolidColorBrush,
+    emphasized: bool,
 ) -> Result<(), RenderError> {
     dc.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     let line_br: ID2D1Brush = brush
         .cast()
         .map_err(|e| RenderError::Win32(e.to_string()))?;
+    let width = if emphasized { 1.35 } else { 1.0 };
+    let alpha = if emphasized { 0.72 } else { 0.38 };
     for pill in pills {
         let Some((from, to)) = pill.debug_connector else {
             continue;
         };
-        dc.DrawLine(from, to, &line_br, 1.35, stroke);
+        solid_brush_set_opacity(brush, alpha)?;
+        dc.DrawLine(from, to, &line_br, width, stroke);
+        let _ = solid_brush_set_opacity(brush, 1.0);
     }
     Ok(())
 }
@@ -486,7 +752,7 @@ pub unsafe fn draw_pills(
                 radiusY: CORNER_RADIUS,
             };
             dc.FillRoundedRectangle(&rr, fill);
-            dc.DrawRoundedRectangle(&rr, border, 1.5, stroke);
+            dc.DrawRoundedRectangle(&rr, border, 1.0, stroke);
 
             let wlabel: Vec<u16> = pill.label.encode_utf16().collect();
             let layout = write
@@ -526,13 +792,13 @@ pub unsafe fn draw_pills(
     Ok(())
 }
 
-/// Premultiplied translucent navy fill (readable on arbitrary backgrounds).
+/// Opaque high-contrast pill fill (premultiplied — alpha at full strength for readability).
 pub fn pill_fill_color() -> D2D1_COLOR_F {
     D2D1_COLOR_F {
-        r: 0.12,
-        g: 0.35,
-        b: 0.78,
-        a: 0.92,
+        r: 0.1,
+        g: 0.22,
+        b: 0.55,
+        a: 0.98,
     }
 }
 
@@ -541,7 +807,7 @@ pub fn pill_border_color() -> D2D1_COLOR_F {
         r: 1.0,
         g: 1.0,
         b: 1.0,
-        a: 0.95,
+        a: 1.0,
     }
 }
 
@@ -572,6 +838,105 @@ pub fn debug_region_fill_color() -> D2D1_COLOR_F {
     }
 }
 
+/// Invoke anchor for [`draw_placement_truth`] (red dot).
+pub fn placement_truth_dot_color() -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: 0.98,
+        g: 0.15,
+        b: 0.12,
+        a: 0.95,
+    }
+}
+
+/// Element bounds outline for [`draw_placement_truth`] (green stroke).
+pub fn placement_truth_bounds_color() -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: 0.2,
+        g: 0.88,
+        b: 0.35,
+        a: 0.9,
+    }
+}
+
+/// Optional debug: truth overlay for precision tuning (`config.toml` `[render]`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlacementTruthFlags {
+    pub target_dot: bool,
+    pub target_rect: bool,
+    pub distance: bool,
+}
+
+/// Red dot = invoke anchor, green outline = element bbox, optional distance (pill center ↔ anchor, DIPs).
+pub unsafe fn draw_placement_truth(
+    dc: &ID2D1DeviceContext,
+    pills: &[PillGeom],
+    dot_fill: &ID2D1SolidColorBrush,
+    bounds_stroke: &ID2D1SolidColorBrush,
+    text_format: &IDWriteTextFormat,
+    write: &IDWriteFactory,
+    text_brush: &ID2D1SolidColorBrush,
+    stroke: &ID2D1StrokeStyle,
+    flags: PlacementTruthFlags,
+) -> Result<(), RenderError> {
+    if !(flags.target_dot || flags.target_rect || flags.distance) {
+        return Ok(());
+    }
+    dc.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    let line_br: ID2D1Brush = bounds_stroke
+        .cast()
+        .map_err(|e| RenderError::Win32(e.to_string()))?;
+    let opts = D2D1_DRAW_TEXT_OPTIONS_CLIP | D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT;
+
+    for pill in pills {
+        if flags.target_rect {
+            solid_brush_set_opacity(bounds_stroke, 1.0)?;
+            dc.DrawRectangle(&pill.target_bounds_client_dip, &line_br, 1.25, stroke);
+        }
+        if flags.target_dot {
+            solid_brush_set_opacity(dot_fill, 1.0)?;
+            let r = 3.0_f32;
+            let dot = D2D_RECT_F {
+                left: pill.anchor_client_dip.x - r,
+                top: pill.anchor_client_dip.y - r,
+                right: pill.anchor_client_dip.x + r,
+                bottom: pill.anchor_client_dip.y + r,
+            };
+            dc.FillRectangle(&dot, dot_fill);
+        }
+        if flags.distance {
+            let d = distance_points(pill_center(&pill.rect), pill.anchor_client_dip);
+            let label = format!("{d:.0}");
+            let wlabel: Vec<u16> = label.encode_utf16().collect();
+            let layout = write
+                .CreateTextLayout(
+                    &wlabel,
+                    text_format,
+                    48.0,
+                    PILL_FONT_EM_DIPS * 1.4,
+                )
+                .map_err(|e| RenderError::Win32(e.to_string()))?;
+            layout
+                .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)
+                .map_err(|e| RenderError::Win32(e.to_string()))?;
+            layout
+                .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)
+                .map_err(|e| RenderError::Win32(e.to_string()))?;
+            solid_brush_set_opacity(text_brush, 0.92)?;
+            dc.DrawTextLayout(
+                D2D_POINT_2F {
+                    x: pill.rect.right + 3.0,
+                    y: pill.rect.top,
+                },
+                &layout,
+                text_brush,
+                opts,
+            );
+            let _ = solid_brush_set_opacity(text_brush, 1.0);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -597,6 +962,7 @@ mod tests {
                 uia_invoke_hwnd: None,
                 uia_child_index: None,
                 bounds: Rect { x, y, w, h },
+                anchor_px: None,
                 kind: ElementKind::Invoke,
                 name: None,
                 backend: Backend::Uia,
@@ -618,11 +984,14 @@ mod tests {
     }
 
     fn pill(label: &str, rect: D2D_RECT_F) -> PillGeom {
+        let pc = pill_center(&rect);
         PillGeom {
             rect,
             label: label.into(),
             opacity: 1.0,
             debug_connector: None,
+            anchor_client_dip: pc,
+            target_bounds_client_dip: rect,
         }
     }
 
@@ -715,7 +1084,7 @@ mod tests {
     }
 
     #[test]
-    fn higher_score_places_first_closer_to_element_center() {
+    fn higher_score_ranked_first_keeps_both_pills_near_invoke_anchor() {
         let x = 100;
         let y = 100;
         let w = 80;
@@ -726,18 +1095,14 @@ mod tests {
         ];
         let pills = pills_for_frame(&low_first, (0, 0), 800.0, 600.0, 96.0, false);
         assert_eq!(pills.len(), 2);
-        let cx = (x + w / 2) as f32;
-        let cy = (y + h / 2) as f32;
-        let dist = |p: &PillGeom| {
-            let px = (p.rect.left + p.rect.right) * 0.5;
-            let py = (p.rect.top + p.rect.bottom) * 0.5;
-            ((px - cx).powi(2) + (py - cy).powi(2)).sqrt()
-        };
-        let d_high = pills.iter().find(|p| p.label == "high").map(dist).unwrap();
-        let d_low = pills.iter().find(|p| p.label == "low").map(dist).unwrap();
+        let dist = |p: &PillGeom| distance_points(pill_center(&p.rect), p.anchor_client_dip);
+        let high = pills.iter().find(|p| p.label == "high").expect("high");
+        let low = pills.iter().find(|p| p.label == "low").expect("low");
         assert!(
-            d_high <= d_low + 2.0,
-            "expected higher-scored hint nearer center: high={d_high} low={d_low} pills={pills:?}"
+            dist(high) <= 44.0 && dist(low) <= 44.0,
+            "expected tight locality to anchor: high={} low={}",
+            dist(high),
+            dist(low)
         );
     }
 
@@ -761,16 +1126,12 @@ mod tests {
     }
 
     #[test]
-    fn debug_connectors_when_requested() {
+    fn connectors_only_when_debug_enabled() {
         let hints = vec![hint_at("x", 1, 50, 50, 40, 40)];
-        let with_c = pills_for_frame(&hints, (0, 0), 800.0, 600.0, 96.0, true);
-        assert!(
-            with_c[0].debug_connector.is_some(),
-            "{:?}",
-            with_c[0].debug_connector
-        );
-        let without = pills_for_frame(&hints, (0, 0), 800.0, 600.0, 96.0, false);
-        assert!(without[0].debug_connector.is_none());
+        let off = pills_for_frame(&hints, (0, 0), 800.0, 600.0, 96.0, false);
+        let on = pills_for_frame(&hints, (0, 0), 800.0, 600.0, 96.0, true);
+        assert!(off[0].debug_connector.is_none());
+        assert!(on[0].debug_connector.is_some());
     }
 
     #[test]
