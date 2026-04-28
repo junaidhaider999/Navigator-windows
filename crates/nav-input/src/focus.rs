@@ -19,8 +19,8 @@ use windows::Win32::UI::Accessibility::{
     UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_SpinnerControlTypeId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetParent, GetWindowThreadProcessId,
-    GUITHREADINFO,
+    GUITHREADINFO, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetParent,
+    GetWindowThreadProcessId,
 };
 use windows::core::PWSTR;
 
@@ -90,7 +90,7 @@ fn suppress_for_terminal_context() -> bool {
     if pid != 0 {
         if let Some(path) = process_exe_path(pid) {
             let base = exe_basename_lower(&path);
-            if TERMINAL_EXE_BASENAMES.iter().any(|&e| e == base.as_str()) {
+            if TERMINAL_EXE_BASENAMES.contains(&base.as_str()) {
                 return true;
             }
         }
@@ -159,11 +159,7 @@ fn foreground_thread_focus_hwnd() -> Option<HWND> {
     };
     unsafe { GetGUIThreadInfo(tid, &mut gti) }.ok()?;
     let f = gti.hwndFocus;
-    if f.is_invalid() {
-        None
-    } else {
-        Some(f)
-    }
+    if f.is_invalid() { None } else { Some(f) }
 }
 
 fn focus_hwnd_implies_text_input() -> bool {
@@ -181,7 +177,9 @@ fn hwnd_class_implies_text_editing(hwnd: HWND) -> bool {
     matches!(lower.as_str(), "edit" | "scintilla")
         || lower.starts_with("richedit")
         || (lower.contains("richtext") && !lower.contains("navigation"))
-        || (lower.contains("textbox") && !lower.contains("calendar") && !lower.contains("navigation"))
+        || (lower.contains("textbox")
+            && !lower.contains("calendar")
+            && !lower.contains("navigation"))
 }
 
 fn foreground_process_browserish() -> bool {
@@ -228,7 +226,7 @@ fn process_exe_path(pid: u32) -> Option<String> {
     let _ = unsafe { CloseHandle(handle) };
     r.ok()?;
     let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    Some(std::string::String::from_utf16_lossy(&buf[..len]).into())
+    Some(std::string::String::from_utf16_lossy(&buf[..len]))
 }
 
 /// True when UIA's focused element matches **keyboard** focus (`hwndFocus`), and that element is a

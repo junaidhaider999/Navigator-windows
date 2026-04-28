@@ -22,6 +22,11 @@ fn shell_tray_hwnd() -> UiaHwnd {
     hwnd
 }
 
+/// GitHub Actions runners often lack a stable interactive UIA session; enumerations can AV.
+fn skip_github_actions_uia_smoke() -> bool {
+    matches!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"))
+}
+
 #[test]
 fn m9_config_defaults_match_nav_config_seed() {
     // Keep aligned with `nav_config::default_budget_uia` / `config.toml` seeds.
@@ -42,6 +47,10 @@ fn m9_uia_runtime_com_init() {
 
 #[test]
 fn m9_enumerate_taskbar_each_policy_succeeds() {
+    if skip_github_actions_uia_smoke() {
+        eprintln!("skip m9_enumerate_taskbar_each_policy_succeeds on GITHUB_ACTIONS");
+        return;
+    }
     let _g = UIA_M9_LOCK.lock().expect("uia m9 lock");
     let rt = UiaRuntime::new().expect("uia");
     let hwnd = shell_tray_hwnd();
@@ -70,6 +79,10 @@ fn m9_enumerate_taskbar_each_policy_succeeds() {
 
 #[test]
 fn m9_enumerate_auto_idempotent() {
+    if skip_github_actions_uia_smoke() {
+        eprintln!("skip m9_enumerate_auto_idempotent on GITHUB_ACTIONS");
+        return;
+    }
     let _g = UIA_M9_LOCK.lock().expect("uia m9 lock");
     let rt = UiaRuntime::new().expect("uia");
     let hwnd = shell_tray_hwnd();
@@ -93,6 +106,10 @@ fn m9_enumerate_auto_idempotent() {
 /// Repeat the full Auto ladder on a live window; catches COM / UIA resource leaks and panics.
 #[test]
 fn m9_reliability_triggers() {
+    if skip_github_actions_uia_smoke() {
+        eprintln!("skip m9_reliability_triggers on GITHUB_ACTIONS");
+        return;
+    }
     const N: usize = 80;
     let _g = UIA_M9_LOCK.lock().expect("uia m9 lock");
     let rt = UiaRuntime::new().expect("uia");

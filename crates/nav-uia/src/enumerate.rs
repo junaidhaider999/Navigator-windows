@@ -481,6 +481,7 @@ fn hwnd_client_screen_rect(hwnd: HWND) -> Option<Rect> {
     })
 }
 
+#[allow(clippy::too_many_arguments)] // UIA enumerate pipe — single hotspot; grouping would obscure flow.
 fn collect_from_descendants_array(
     all: &IUIAutomationElementArray,
     opts: &EnumOptions,

@@ -25,3 +25,9 @@ Thumbs.db
 *.etl
 *.wpa.json
 flame.svg
+
+# Packaged user bundle (see user-space/package.ps1 — README.txt + package.ps1 stay tracked)
+user-space/navigator.exe
+user-space/LICENSE
+user-space/screenshots/
+user-space/*.zip
