@@ -14,6 +14,7 @@ fn sample_raws(n: usize) -> Vec<RawHint> {
                 w: 80,
                 h: 24,
             },
+            anchor_px: None,
             kind: ElementKind::Invoke,
             name: None,
             backend: Backend::Uia,

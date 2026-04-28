@@ -19,6 +19,7 @@ fn synthetic_raws(n: usize) -> Vec<RawHint> {
                 w: 48,
                 h: 20,
             },
+            anchor_px: None,
             kind: ElementKind::Invoke,
             name: None,
             backend: Backend::Uia,
