@@ -32,6 +32,7 @@ fn two_planned_hints() -> (Session, String, String) {
             w: 50,
             h: 50,
         },
+        0,
     );
     let a = hints[0].label.to_string();
     let b = hints[1].label.to_string();
@@ -118,6 +119,7 @@ fn backspace_restores_candidates() {
             w: 50,
             h: 50,
         },
+        0,
     );
     let c0 = hints_vec[0].label.chars().next().unwrap();
     let mut s = Session::new(0);

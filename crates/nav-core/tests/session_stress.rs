@@ -32,6 +32,7 @@ fn sample_session(n: usize) -> Session {
             w: 100,
             h: 100,
         },
+        0,
     );
     let mut s = Session::new(0);
     s.ingest(hints);

@@ -38,6 +38,7 @@ fn one_hint_session() -> Session {
             w: 10,
             h: 10,
         },
+        0,
     );
     let mut session = Session::new(0);
     session.ingest(hints);

@@ -11,7 +11,7 @@ const W_SIZE: f32 = 0.2;
 
 /// Assigns labels and scores to `raws`. Higher [`Hint::score`] = higher planner priority.
 ///
-/// The `short` labels from the vimium generator go to the highest-ranked hints.
+/// `max_planned`: keep only the top-N raw hints by [`priority_score`] before labeling (`0` = no cap).
 ///
 /// # Example
 ///
@@ -29,18 +29,15 @@ const W_SIZE: f32 = 0.2;
 ///     backend: Backend::Uia,
 /// };
 /// let alphabet: Vec<char> = "sadfjklewcmpgh".chars().collect();
-/// let hints = plan(vec![raw.clone(), raw], &alphabet, Rect { x: 0, y: 0, w: 10, h: 10 });
+/// let hints = plan(vec![raw.clone(), raw], &alphabet, Rect { x: 0, y: 0, w: 10, h: 10 }, 0);
 /// assert_eq!(hints.len(), 2);
 /// ```
 #[must_use]
-pub fn plan(raws: Vec<RawHint>, alphabet: &[char], layout_origin: Rect) -> Vec<Hint> {
-    let n = raws.len();
-    if n == 0 {
+pub fn plan(raws: Vec<RawHint>, alphabet: &[char], layout_origin: Rect, max_planned: usize) -> Vec<Hint> {
+    let n_all = raws.len();
+    if n_all == 0 {
         return Vec::new();
     }
-
-    let labels = generate_labels(n, alphabet);
-    let (_digits, long_c, short_c) = vimium_partition(n, alphabet.len());
 
     let mut scored: Vec<(usize, f32)> = raws
         .iter()
@@ -53,22 +50,37 @@ pub fn plan(raws: Vec<RawHint>, alphabet: &[char], layout_origin: Rect) -> Vec<H
             .then_with(|| a.0.cmp(&b.0))
     });
 
+    let cap = if max_planned == 0 {
+        n_all
+    } else {
+        max_planned.min(n_all)
+    };
+
+    let picked_raws: Vec<RawHint> = scored
+        .iter()
+        .take(cap)
+        .map(|(i, _)| raws[*i].clone())
+        .collect();
+
+    let n = picked_raws.len();
+    let labels = generate_labels(n, alphabet);
+    let (_digits, long_c, short_c) = vimium_partition(n, alphabet.len());
+
     let mut label_for: Vec<Option<Box<str>>> = vec![None; n];
     let mut score_for = vec![0.0f32; n];
 
     for rank in 0..short_c {
-        let raw_i = scored[rank].0;
-        label_for[raw_i] = Some(labels[long_c + rank].clone());
-        score_for[raw_i] = scored[rank].1;
+        label_for[rank] = Some(labels[long_c + rank].clone());
+        score_for[rank] = priority_score(&picked_raws[rank], layout_origin);
     }
     for (k, label) in labels.iter().take(long_c).enumerate() {
         let rank = short_c + k;
-        let raw_i = scored[rank].0;
-        label_for[raw_i] = Some(label.clone());
-        score_for[raw_i] = scored[rank].1;
+        label_for[rank] = Some(label.clone());
+        score_for[rank] = priority_score(&picked_raws[rank], layout_origin);
     }
 
-    raws.into_iter()
+    picked_raws
+        .into_iter()
         .enumerate()
         .map(|(i, raw)| Hint {
             raw,
@@ -102,5 +114,10 @@ fn priority_score(raw: &RawHint, focus_rect: Rect) -> f32 {
     // Penalize huge container rects so short labels go to tighter, likely-real targets.
     const LARGE_PX: i64 = 480_000; // ~800x600
     let large_penalty = if area_i > LARGE_PX { -0.35 } else { 0.0 };
-    W_PROXIMITY * prox + kind + size_term + large_penalty
+
+    let cy = raw.bounds.y + raw.bounds.h / 2;
+    let rel_y = (cy - focus_rect.y) as f32 / focus_rect.h.max(1) as f32;
+    let footer_penalty = if rel_y > 0.88 { -0.12 } else { 0.0 };
+
+    W_PROXIMITY * prox + kind + size_term + large_penalty + footer_penalty
 }
