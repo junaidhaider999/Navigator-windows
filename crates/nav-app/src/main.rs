@@ -413,8 +413,10 @@ fn dispatch_input(
     match ev {
         nav_input::InputEvent::Hotkey(p) => {
             println!(
-                "[input] hotkey captured_hwnd=0x{:x} latency_us={}",
-                p.captured_hwnd, p.latency_us
+                "[input] hotkey captured_hwnd=0x{:x} latency_us={} plain_slash={}",
+                p.captured_hwnd,
+                p.latency_us,
+                p.from_plain_slash
             );
 
             if input.hint_mode.load(Ordering::Acquire) {

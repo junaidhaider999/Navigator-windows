@@ -13,18 +13,19 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, HOT_KEY_MODIFIERS, RegisterHotKey, UnregisterHotKey, VK_A, VK_BACK,
-    VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT, VK_Z,
+    VK_CONTROL, VK_DIVIDE, VK_ESCAPE, VK_LWIN, VK_MENU, VK_OEM_2, VK_RWIN, VK_SHIFT, VK_Z,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowW,
     GetForegroundWindow, GetMessageW, HHOOK, HWND_MESSAGE, KBDLLHOOKSTRUCT, MSG, PostMessageW,
     PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetWindowsHookExW, TranslateMessage,
     UnhookWindowsHookEx, UnregisterClassW, WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_DESTROY, WM_HOTKEY, WM_KEYDOWN, WM_SYSKEYDOWN, WM_USER, WNDCLASSEXW,
+    WM_DESTROY, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER, WNDCLASSEXW,
 };
 use windows::core::PCWSTR;
 
 use crate::chord;
+use crate::focus;
 use crate::hotkey::PRIMARY_HOTKEY_ID;
 use crate::{HotkeyPress, InputError, InputEvent, SessionKey};
 
@@ -35,8 +36,18 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 const BRING_FOREGROUND_WPARAM: usize = 1;
 /// `LLKHF_ALTDOWN` — distinguish Alt-derived system key events in the LL hook.
 const LLKHF_ALTDOWN: u32 = 0x20;
+/// Injected key (ignore for plain-`/` activator).
+const LLKHF_INJECTED: u32 = 0x10;
 
 const WM_REREGISTER_HOTKEY: u32 = WM_USER + 302;
+
+#[inline]
+fn is_plain_slash_vk(vk: u32) -> bool {
+    vk == VK_OEM_2.0 as u32 || vk == VK_DIVIDE.0 as u32
+}
+
+/// After we swallow plain `/` keydown, swallow repeats and matching keyup so the target app never sees `/`.
+static PLAIN_SLASH_AWAITING_KEYUP: AtomicBool = AtomicBool::new(false);
 
 static HOTKEY_ATOMIC: AtomicU64 = AtomicU64::new(0);
 static INPUT_HWND: OnceLock<usize> = OnceLock::new();
@@ -64,6 +75,8 @@ static PUMP_CTX: OnceLock<PumpCtx> = OnceLock::new();
 struct HookState {
     tx: Sender<InputEvent>,
     hint_mode: Arc<AtomicBool>,
+    /// Same QPC frequency as [`PumpCtx`] so plain-`/` dispatch never depends on `PUMP_CTX`.
+    qpc_freq: i64,
 }
 
 static HOOK_STATE: OnceLock<HookState> = OnceLock::new();
@@ -102,6 +115,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 id: wparam.0 as i32,
                 captured_hwnd: fg.0 as usize,
                 latency_us: us,
+                from_plain_slash: false,
             });
             let _ = ctx.tx.send(event);
             LRESULT(0)
@@ -152,6 +166,32 @@ fn hotkey_mods_satisfied(reg: u32) -> bool {
     true
 }
 
+fn modifiers_preclude_plain_slash_activator() -> bool {
+    unsafe {
+        (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0
+            || (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0
+            || (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0
+            || (GetAsyncKeyState(VK_LWIN.0 as i32) as u16 & 0x8000) != 0
+            || (GetAsyncKeyState(VK_RWIN.0 as i32) as u16 & 0x8000) != 0
+    }
+}
+
+fn dispatch_plain_slash_hotkey(state: &HookState) {
+    let mut t0 = 0i64;
+    let _ = unsafe { QueryPerformanceCounter(&mut t0) };
+    let fg = unsafe { GetForegroundWindow() };
+    let mut t1 = 0i64;
+    let _ = unsafe { QueryPerformanceCounter(&mut t1) };
+    let us = qpc_delta_to_micros(state.qpc_freq, t0, t1);
+    let event = InputEvent::Hotkey(HotkeyPress {
+        id: PRIMARY_HOTKEY_ID,
+        captured_hwnd: fg.0 as usize,
+        latency_us: us,
+        from_plain_slash: true,
+    });
+    let _ = state.tx.send(event);
+}
+
 unsafe extern "system" fn low_level_keyboard_proc(
     code: i32,
     wparam: WPARAM,
@@ -163,51 +203,77 @@ unsafe extern "system" fn low_level_keyboard_proc(
     let Some(state) = HOOK_STATE.get() else {
         return unsafe { CallNextHookEx(None, code, wparam, lparam) };
     };
-    if !state.hint_mode.load(Ordering::Acquire) {
-        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-    }
 
     let msg = wparam.0 as u32;
-    if msg != WM_KEYDOWN && msg != WM_SYSKEYDOWN {
-        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-    }
-
     let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
     let vk = kb.vkCode;
     let flags = kb.flags.0;
 
-    let (reg_mods, reg_vk) = load_hotkey();
-    if vk == reg_vk && hotkey_mods_satisfied(reg_mods.0) {
-        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-    }
-
-    // Let other Alt combinations (menus) through.
-    if (flags & LLKHF_ALTDOWN) != 0 {
-        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-    }
-    // Do not swallow common Win / Ctrl shortcuts while filter mode is on.
-    if (unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } as u16 & 0x8000) != 0
-        || (unsafe { GetAsyncKeyState(VK_LWIN.0 as i32) } as u16 & 0x8000) != 0
-        || (unsafe { GetAsyncKeyState(VK_RWIN.0 as i32) } as u16 & 0x8000) != 0
-    {
-        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-    }
-
-    let event = match vk {
-        x if x == VK_ESCAPE.0 as u32 => Some(SessionKey::Escape),
-        x if x == VK_BACK.0 as u32 => Some(SessionKey::Backspace),
-        x if (VK_A.0 as u32..=VK_Z.0 as u32).contains(&x) => {
-            chord::vk_session_char(x).map(SessionKey::Char)
+    if msg == WM_KEYUP || msg == WM_SYSKEYUP {
+        if is_plain_slash_vk(vk) && PLAIN_SLASH_AWAITING_KEYUP.load(Ordering::Acquire) {
+            PLAIN_SLASH_AWAITING_KEYUP.store(false, Ordering::Release);
+            return LRESULT(1);
         }
-        _ => None,
-    };
-
-    if let Some(sk) = event {
-        let _ = state.tx.send(InputEvent::SessionKey(sk));
-        LRESULT(1)
-    } else {
-        unsafe { CallNextHookEx(None, code, wparam, lparam) }
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
     }
+
+    if msg != WM_KEYDOWN && msg != WM_SYSKEYDOWN {
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+    }
+
+    if state.hint_mode.load(Ordering::Acquire) {
+        let (reg_mods, reg_vk) = load_hotkey();
+        if vk == reg_vk && hotkey_mods_satisfied(reg_mods.0) {
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
+        if (flags & LLKHF_ALTDOWN) != 0 {
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
+        if (unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } as u16 & 0x8000) != 0
+            || (unsafe { GetAsyncKeyState(VK_LWIN.0 as i32) } as u16 & 0x8000) != 0
+            || (unsafe { GetAsyncKeyState(VK_RWIN.0 as i32) } as u16 & 0x8000) != 0
+        {
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
+
+        let event = match vk {
+            x if x == VK_ESCAPE.0 as u32 => Some(SessionKey::Escape),
+            x if x == VK_BACK.0 as u32 => Some(SessionKey::Backspace),
+            x if (VK_A.0 as u32..=VK_Z.0 as u32).contains(&x) => {
+                chord::vk_session_char(x).map(SessionKey::Char)
+            }
+            _ => None,
+        };
+
+        return if let Some(sk) = event {
+            let _ = state.tx.send(InputEvent::SessionKey(sk));
+            LRESULT(1)
+        } else {
+            unsafe { CallNextHookEx(None, code, wparam, lparam) }
+        };
+    }
+
+    if !is_plain_slash_vk(vk) {
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+    }
+    if (flags & LLKHF_INJECTED) != 0 {
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+    }
+    if modifiers_preclude_plain_slash_activator() {
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+    }
+    if focus::focused_control_suppresses_plain_slash_hotkey() {
+        PLAIN_SLASH_AWAITING_KEYUP.store(false, Ordering::Release);
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+    }
+
+    if PLAIN_SLASH_AWAITING_KEYUP.load(Ordering::Acquire) {
+        return LRESULT(1);
+    }
+
+    PLAIN_SLASH_AWAITING_KEYUP.store(true, Ordering::Release);
+    dispatch_plain_slash_hotkey(state);
+    LRESULT(1)
 }
 
 fn qpc_delta_to_micros(freq: i64, t0: i64, t1: i64) -> u64 {
@@ -255,6 +321,8 @@ impl InputThread {
             let setup = || -> Result<(HWND, HHOOK), InputError> {
                 let mut freq = 0i64;
                 unsafe { QueryPerformanceFrequency(&mut freq)? };
+
+                focus::ensure_com_apartment();
 
                 let module = unsafe { GetModuleHandleW(None)? };
                 let instance = HINSTANCE(module.0);
@@ -304,6 +372,7 @@ impl InputThread {
                 let _ = HOOK_STATE.set(HookState {
                     tx: tx.clone(),
                     hint_mode: hint_for_thread,
+                    qpc_freq: freq,
                 });
 
                 let hook = unsafe {

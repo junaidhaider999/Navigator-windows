@@ -8,6 +8,9 @@
 mod hotkey;
 
 #[cfg(windows)]
+mod focus;
+
+#[cfg(windows)]
 mod chord;
 
 #[cfg(windows)]
@@ -22,15 +25,17 @@ mod stub;
 #[cfg(not(windows))]
 pub use stub::InputThread;
 
-/// Snapshot emitted when the primary hotkey (`Alt+;`) fires.
+/// Snapshot emitted when the primary hotkey fires (registered chord, e.g. `Alt+;`, or plain `/` when safe).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HotkeyPress {
-    /// `RegisterHotKey` id (`wParam` of `WM_HOTKEY`).
+    /// `RegisterHotKey` id (`wParam` of `WM_HOTKEY`); same as primary id for plain-`/` activations.
     pub id: i32,
     /// `GetForegroundWindow` at trigger time (pointer value as `usize`).
     pub captured_hwnd: usize,
     /// Time inside the `WM_HOTKEY` handler: ΔQPC from before `GetForegroundWindow` to after, in microseconds.
     pub latency_us: u64,
+    /// `true` when this activation used plain `/` (or numpad `/`) because focus was not in a typical text field.
+    pub from_plain_slash: bool,
 }
 
 /// Keystrokes delivered while hint mode is active (low-level hook; see C3 in `04-build-order.md`).
