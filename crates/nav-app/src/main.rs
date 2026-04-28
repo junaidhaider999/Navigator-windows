@@ -552,7 +552,10 @@ fn dispatch_input(
                 l.overlay_session,
                 &initial,
                 &l.active_debug_rejects,
-                debug_pill_connectors,
+                nav_render::OverlayRenderOpts {
+                    debug_connectors: debug_pill_connectors,
+                    ..Default::default()
+                },
             ) {
                 eprintln!("[render] show: {e}");
                 l.session = None;
@@ -613,7 +616,10 @@ fn dispatch_input(
                         sid,
                         &visible,
                         &l.active_debug_rejects,
-                        debug_pill_connectors,
+                        nav_render::OverlayRenderOpts {
+                            debug_connectors: debug_pill_connectors,
+                            ..Default::default()
+                        },
                     ) {
                         eprintln!("[render] repaint: {e}");
                     }
