@@ -39,6 +39,7 @@ fn bench_plan(c: &mut Criterion) {
                     black_box(raws.clone()),
                     black_box(alphabet.as_slice()),
                     black_box(layout_origin),
+                    0,
                 )
             })
         });

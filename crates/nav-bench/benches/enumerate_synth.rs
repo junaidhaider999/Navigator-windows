@@ -47,6 +47,7 @@ fn bench_dedupe_then_plan(c: &mut Criterion) {
                         deduped,
                         black_box(alphabet.as_slice()),
                         black_box(layout),
+                        0,
                     ))
                 },
             );
