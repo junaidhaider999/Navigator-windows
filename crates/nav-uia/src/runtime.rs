@@ -37,6 +37,7 @@ use crate::fallback_msaa::{enumerate_msaa, invoke_msaa_at};
 use crate::hwnd::UiaHwnd;
 use crate::invoke::invoke_invoke_pattern;
 use crate::options::{EnumOptions, EnumerationProfile, FallbackPolicy};
+use crate::strategy::{ResolvedLadder, probe_window, resolve_enumeration_behavior};
 
 fn qpc_delta_ms(freq: i64, t0: i64, t1: i64) -> f64 {
     if freq <= 0 {
@@ -172,23 +173,38 @@ impl UiaRuntime {
         hwnd: UiaHwnd,
         opts: &EnumOptions,
     ) -> Result<NavEnumerateResult, UiaError> {
+        let probe = probe_window(hwnd);
+        let (ladder, disable_parallel) =
+            resolve_enumeration_behavior(opts.strategy_mode, &probe);
+        let mut opts_eff = opts.clone();
+        opts_eff.disable_uia_parallel = disable_parallel;
+
+        eprintln!(
+            "[strategy_detect] ladder={:?} parallel_off={} pid={} class={} exe={}",
+            ladder,
+            disable_parallel,
+            probe.pid,
+            probe.class_name,
+            probe.exe_basename
+        );
+
         let mut freq = 0i64;
         unsafe {
             let _ = QueryPerformanceFrequency(&mut freq);
         }
 
-        match opts.fallback {
+        match opts_eff.fallback {
             FallbackPolicy::MsaaOnly => {
                 let mut t0 = 0i64;
                 let mut t1 = 0i64;
                 unsafe {
                     let _ = QueryPerformanceCounter(&mut t0);
                 }
-                let hints = enumerate_msaa(hwnd, opts)?;
+                let hints = enumerate_msaa(hwnd, &opts_eff)?;
                 unsafe {
                     let _ = QueryPerformanceCounter(&mut t1);
                 }
-                budget_warn("msaa", qpc_delta_ms(freq, t0, t1), opts.budget_msaa_ms);
+                budget_warn("msaa", qpc_delta_ms(freq, t0, t1), opts_eff.budget_msaa_ms);
                 Ok(NavEnumerateResult {
                     hints,
                     debug_rejects: Vec::new(),
@@ -196,85 +212,166 @@ impl UiaRuntime {
                 })
             }
             FallbackPolicy::UiaOnly => {
-                let find_cond = self.find_descendants_condition(opts)?;
+                let find_cond = self.find_descendants_condition(&opts_eff)?;
                 let mut t0 = 0i64;
                 let mut t1 = 0i64;
                 unsafe {
                     let _ = QueryPerformanceCounter(&mut t0);
                 }
-                let res =
-                    enumerate_baseline(&self.automation, hwnd, opts, &self.enum_cache, &find_cond);
+                let res = enumerate_baseline(
+                    &self.automation,
+                    hwnd,
+                    &opts_eff,
+                    &self.enum_cache,
+                    &find_cond,
+                );
                 unsafe {
                     let _ = QueryPerformanceCounter(&mut t1);
                 }
-                budget_warn("uia", qpc_delta_ms(freq, t0, t1), opts.budget_uia_ms);
+                budget_warn("uia", qpc_delta_ms(freq, t0, t1), opts_eff.budget_uia_ms);
                 res
             }
-            FallbackPolicy::Auto => {
-                let find_cond = self.find_descendants_condition(opts)?;
+            FallbackPolicy::Auto => match ladder {
+                ResolvedLadder::UiaFirst => {
+                    let find_cond = self.find_descendants_condition(&opts_eff)?;
 
-                let mut t_uia_0 = 0i64;
-                let mut t_uia_1 = 0i64;
-                unsafe {
-                    let _ = QueryPerformanceCounter(&mut t_uia_0);
-                }
-                let r =
-                    enumerate_baseline(&self.automation, hwnd, opts, &self.enum_cache, &find_cond)?;
-                unsafe {
-                    let _ = QueryPerformanceCounter(&mut t_uia_1);
-                }
-                budget_warn(
-                    "uia",
-                    qpc_delta_ms(freq, t_uia_0, t_uia_1),
-                    opts.budget_uia_ms,
-                );
+                    let mut t_uia_0 = 0i64;
+                    let mut t_uia_1 = 0i64;
+                    unsafe {
+                        let _ = QueryPerformanceCounter(&mut t_uia_0);
+                    }
+                    let r = enumerate_baseline(
+                        &self.automation,
+                        hwnd,
+                        &opts_eff,
+                        &self.enum_cache,
+                        &find_cond,
+                    )?;
+                    unsafe {
+                        let _ = QueryPerformanceCounter(&mut t_uia_1);
+                    }
+                    budget_warn(
+                        "uia",
+                        qpc_delta_ms(freq, t_uia_0, t_uia_1),
+                        opts_eff.budget_uia_ms,
+                    );
 
-                if !r.hints.is_empty() {
-                    return Ok(r);
-                }
+                    if !r.hints.is_empty() {
+                        return Ok(r);
+                    }
 
-                let mut t_msaa_0 = 0i64;
-                let mut t_msaa_1 = 0i64;
-                unsafe {
-                    let _ = QueryPerformanceCounter(&mut t_msaa_0);
-                }
-                let msaa = enumerate_msaa(hwnd, opts)?;
-                unsafe {
-                    let _ = QueryPerformanceCounter(&mut t_msaa_1);
-                }
-                budget_warn(
-                    "msaa",
-                    qpc_delta_ms(freq, t_msaa_0, t_msaa_1),
-                    opts.budget_msaa_ms,
-                );
-                if !msaa.is_empty() {
-                    return Ok(NavEnumerateResult {
-                        hints: msaa,
+                    let mut t_msaa_0 = 0i64;
+                    let mut t_msaa_1 = 0i64;
+                    unsafe {
+                        let _ = QueryPerformanceCounter(&mut t_msaa_0);
+                    }
+                    let msaa = enumerate_msaa(hwnd, &opts_eff)?;
+                    unsafe {
+                        let _ = QueryPerformanceCounter(&mut t_msaa_1);
+                    }
+                    budget_warn(
+                        "msaa",
+                        qpc_delta_ms(freq, t_msaa_0, t_msaa_1),
+                        opts_eff.budget_msaa_ms,
+                    );
+                    if !msaa.is_empty() {
+                        return Ok(NavEnumerateResult {
+                            hints: msaa,
+                            debug_rejects: r.debug_rejects,
+                            timings_ms: None,
+                        });
+                    }
+
+                    let mut t_hw_0 = 0i64;
+                    let mut t_hw_1 = 0i64;
+                    unsafe {
+                        let _ = QueryPerformanceCounter(&mut t_hw_0);
+                    }
+                    let hwnd_hints = enumerate_raw_hwnd(hwnd, &opts_eff)?;
+                    unsafe {
+                        let _ = QueryPerformanceCounter(&mut t_hw_1);
+                    }
+                    budget_warn(
+                        "hwnd",
+                        qpc_delta_ms(freq, t_hw_0, t_hw_1),
+                        opts_eff.budget_hwnd_ms,
+                    );
+                    Ok(NavEnumerateResult {
+                        hints: hwnd_hints,
                         debug_rejects: r.debug_rejects,
                         timings_ms: None,
-                    });
+                    })
                 }
+                ResolvedLadder::Win32First => {
+                    let find_cond = self.find_descendants_condition(&opts_eff)?;
 
-                let mut t_hw_0 = 0i64;
-                let mut t_hw_1 = 0i64;
-                unsafe {
-                    let _ = QueryPerformanceCounter(&mut t_hw_0);
+                    let mut t_hw_0 = 0i64;
+                    let mut t_hw_1 = 0i64;
+                    unsafe {
+                        let _ = QueryPerformanceCounter(&mut t_hw_0);
+                    }
+                    let hwnd_hints = enumerate_raw_hwnd(hwnd, &opts_eff)?;
+                    unsafe {
+                        let _ = QueryPerformanceCounter(&mut t_hw_1);
+                    }
+                    budget_warn(
+                        "hwnd",
+                        qpc_delta_ms(freq, t_hw_0, t_hw_1),
+                        opts_eff.budget_hwnd_ms,
+                    );
+                    if !hwnd_hints.is_empty() {
+                        return Ok(NavEnumerateResult {
+                            hints: hwnd_hints,
+                            debug_rejects: Vec::new(),
+                            timings_ms: None,
+                        });
+                    }
+
+                    let mut t_msaa_0 = 0i64;
+                    let mut t_msaa_1 = 0i64;
+                    unsafe {
+                        let _ = QueryPerformanceCounter(&mut t_msaa_0);
+                    }
+                    let msaa = enumerate_msaa(hwnd, &opts_eff)?;
+                    unsafe {
+                        let _ = QueryPerformanceCounter(&mut t_msaa_1);
+                    }
+                    budget_warn(
+                        "msaa",
+                        qpc_delta_ms(freq, t_msaa_0, t_msaa_1),
+                        opts_eff.budget_msaa_ms,
+                    );
+                    if !msaa.is_empty() {
+                        return Ok(NavEnumerateResult {
+                            hints: msaa,
+                            debug_rejects: Vec::new(),
+                            timings_ms: None,
+                        });
+                    }
+
+                    let mut t_uia_0 = 0i64;
+                    let mut t_uia_1 = 0i64;
+                    unsafe {
+                        let _ = QueryPerformanceCounter(&mut t_uia_0);
+                    }
+                    let r = enumerate_baseline(
+                        &self.automation,
+                        hwnd,
+                        &opts_eff,
+                        &self.enum_cache,
+                        &find_cond,
+                    )?;
+                    unsafe {
+                        let _ = QueryPerformanceCounter(&mut t_uia_1);
+                    }
+                    budget_warn(
+                        "uia",
+                        qpc_delta_ms(freq, t_uia_0, t_uia_1),
+                        opts_eff.budget_uia_ms,
+                    );
+                    Ok(r)
                 }
-                let hwnd_hints = enumerate_raw_hwnd(hwnd, opts)?;
-                unsafe {
-                    let _ = QueryPerformanceCounter(&mut t_hw_1);
-                }
-                budget_warn(
-                    "hwnd",
-                    qpc_delta_ms(freq, t_hw_0, t_hw_1),
-                    opts.budget_hwnd_ms,
-                );
-                Ok(NavEnumerateResult {
-                    hints: hwnd_hints,
-                    debug_rejects: r.debug_rejects,
-                    timings_ms: None,
-                })
-            }
+            },
         }
     }
 

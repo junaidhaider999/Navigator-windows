@@ -24,6 +24,20 @@ pub enum EnumerationProfile {
     Full,
 }
 
+/// Per-window enumeration ladder override (`[hints].enumeration_strategy` in config).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum EnumerationStrategyMode {
+    /// Use [`crate::strategy::probe_window`] + class/exe heuristics.
+    #[default]
+    Auto,
+    /// Always UIA → MSAA → HWND.
+    UiaFirst,
+    /// HWND (`EnumChildWindows`) → MSAA → UIA (Explorer / Win32-first).
+    Win32First,
+    /// UIA first but disable Rayon subtree fan-out (Chromium/Electron).
+    ChromiumFast,
+}
+
 /// Controls what the slow baseline enumerator returns.
 #[derive(Clone, Debug)]
 pub struct EnumOptions {
@@ -44,6 +58,10 @@ pub struct EnumOptions {
     pub debug_uia: bool,
     /// When true, record skipped nodes with bounds (when known) for a visual debug overlay.
     pub debug_overlay: bool,
+    /// See [`EnumerationStrategyMode`].
+    pub strategy_mode: EnumerationStrategyMode,
+    /// When true, skip Rayon HWND-subtree parallel path in [`crate::enumerate::enumerate_baseline`].
+    pub disable_uia_parallel: bool,
 }
 
 impl Default for EnumOptions {
@@ -54,12 +72,14 @@ impl Default for EnumOptions {
             include_disabled: false,
             fallback: FallbackPolicy::Auto,
             profile: EnumerationProfile::default(),
-            materialize_hard_budget_ms: 60,
+            materialize_hard_budget_ms: 30,
             budget_uia_ms: M9_DEFAULT_BUDGET_UIA_MS,
             budget_msaa_ms: M9_DEFAULT_BUDGET_MSAA_MS,
             budget_hwnd_ms: M9_DEFAULT_BUDGET_HWND_MS,
             debug_uia: false,
             debug_overlay: false,
+            strategy_mode: EnumerationStrategyMode::default(),
+            disable_uia_parallel: false,
         }
     }
 }

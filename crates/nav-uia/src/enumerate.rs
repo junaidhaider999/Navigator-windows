@@ -117,7 +117,7 @@ pub fn enumerate_baseline(
         return Ok(finish(hints, find_ms, mat_ms));
     }
 
-    if len < PARALLEL_DESCENDANT_MIN {
+    if len < PARALLEL_DESCENDANT_MIN || opts.disable_uia_parallel {
         let t_mat = Instant::now();
         let hints =
             collect_from_descendants_array(&all, opts, hwnd, None, None, true, &reject_sink)?;

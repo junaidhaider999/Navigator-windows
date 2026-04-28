@@ -10,7 +10,7 @@ pub mod options;
 pub use error::UiaError;
 pub use hwnd::UiaHwnd;
 pub use options::{
-    EnumOptions, EnumerationProfile, FallbackPolicy, M9_DEFAULT_BUDGET_HWND_MS,
+    EnumOptions, EnumerationProfile, EnumerationStrategyMode, FallbackPolicy, M9_DEFAULT_BUDGET_HWND_MS,
     M9_DEFAULT_BUDGET_MSAA_MS, M9_DEFAULT_BUDGET_UIA_MS,
 };
 
@@ -34,9 +34,13 @@ mod invoke;
 mod pattern;
 #[cfg(windows)]
 mod runtime;
+#[cfg(windows)]
+mod strategy;
 
 #[cfg(windows)]
 pub use runtime::UiaRuntime;
+#[cfg(windows)]
+pub use strategy::{probe_window, resolve_enumeration_behavior, ResolvedLadder, WindowProbe};
 
 #[cfg(not(windows))]
 use nav_core::{Hint, NavEnumerateResult};

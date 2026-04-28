@@ -15,6 +15,7 @@ pub struct DedupeStats {
 
 #[must_use]
 pub fn dedupe_raw_hints(candidates: Vec<RawHint>) -> (Vec<RawHint>, DedupeStats) {
+    let candidates = filter_junk_raw_hints(candidates);
     let before = candidates.len();
     if before <= 1 {
         return (
@@ -42,6 +43,27 @@ pub fn dedupe_raw_hints(candidates: Vec<RawHint>) -> (Vec<RawHint>, DedupeStats)
             removed: before.saturating_sub(after),
         },
     )
+}
+
+/// Drop tiny generic chrome (Electron noise) before structural dedupe.
+fn filter_junk_raw_hints(candidates: Vec<RawHint>) -> Vec<RawHint> {
+    const MIN_AREA: i64 = 24 * 24;
+    candidates
+        .into_iter()
+        .filter(|h| {
+            let a = area(h);
+            if a >= MIN_AREA {
+                return true;
+            }
+            matches!(
+                h.kind,
+                ElementKind::Invoke
+                    | ElementKind::Toggle
+                    | ElementKind::Select
+                    | ElementKind::Editable
+            )
+        })
+        .collect()
 }
 
 fn area(h: &RawHint) -> i64 {
