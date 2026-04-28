@@ -265,9 +265,19 @@ struct AppState {
 }
 
 #[cfg(windows)]
+fn parse_enumeration_profile(s: &str) -> nav_uia::EnumerationProfile {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "full" => nav_uia::EnumerationProfile::Full,
+        _ => nav_uia::EnumerationProfile::Fast,
+    }
+}
+
+#[cfg(windows)]
 fn build_enum_opts(cfg: &nav_config::Config, cli: &CliSnapshot) -> nav_uia::EnumOptions {
     nav_uia::EnumOptions {
         max_elements: cfg.hints.max_elements,
+        profile: parse_enumeration_profile(&cfg.hints.enumeration_profile),
+        materialize_hard_budget_ms: cfg.hints.materialize_budget_ms,
         budget_uia_ms: cfg.fallback.budget_ms.uia,
         budget_msaa_ms: cfg.fallback.budget_ms.msaa,
         budget_hwnd_ms: cfg.fallback.budget_ms.hwnd,
@@ -415,7 +425,7 @@ fn dispatch_input(
                 return;
             }
 
-            let took_ms = if freq > 0 {
+            let enumerate_total_ms = if freq > 0 {
                 (t1.saturating_sub(t0) as f64) * 1000.0 / freq as f64
             } else {
                 0.0
@@ -424,14 +434,22 @@ fn dispatch_input(
             let NavEnumerateResult {
                 hints: raws_in,
                 debug_rejects,
+                ..
             } = match enum_res {
                 Ok(res) => {
-                    println!(
-                        "[uia] hwnd=0x{:x} elements={} took_ms={:.2}",
+                    print!(
+                        "[uia] hwnd=0x{:x} elements={} enumerate_total_ms={:.2}",
                         p.captured_hwnd,
                         res.hints.len(),
-                        took_ms
+                        enumerate_total_ms
                     );
+                    if let Some(ref t) = res.timings_ms {
+                        print!(
+                            " findall_ms={:.2} materialize_ms={:.2}",
+                            t.findall_ms, t.materialize_ms
+                        );
+                    }
+                    println!();
                     res
                 }
                 Err(e) => {
@@ -440,10 +458,29 @@ fn dispatch_input(
                 }
             };
 
+            let mut t_dedupe_0 = 0i64;
+            if unsafe { QueryPerformanceCounter(&mut t_dedupe_0) }.is_err() {
+                eprintln!("[dedupe] QueryPerformanceCounter failed");
+                return;
+            }
+
             let (raws, dedupe_stats) = nav_core::dedupe_raw_hints(raws_in);
+
+            let mut t_dedupe_1 = 0i64;
+            if unsafe { QueryPerformanceCounter(&mut t_dedupe_1) }.is_err() {
+                eprintln!("[dedupe] QueryPerformanceCounter (end) failed");
+                return;
+            }
+
+            let dedupe_ms = if freq > 0 {
+                (t_dedupe_1.saturating_sub(t_dedupe_0) as f64) * 1000.0 / freq as f64
+            } else {
+                0.0
+            };
+
             eprintln!(
-                "[dedupe] before={} after={} removed={}",
-                dedupe_stats.before, dedupe_stats.after, dedupe_stats.removed
+                "[dedupe] before={} after={} removed={} dedupe_ms={:.2}",
+                dedupe_stats.before, dedupe_stats.after, dedupe_stats.removed, dedupe_ms
             );
 
             let mut wr = windows::Win32::Foundation::RECT::default();
@@ -464,7 +501,37 @@ fn dispatch_input(
             };
 
             let alphabet = app.lock().expect("state").alphabet.clone();
+
+            let mut t_plan_0 = 0i64;
+            if unsafe { QueryPerformanceCounter(&mut t_plan_0) }.is_err() {
+                eprintln!("[plan] QueryPerformanceCounter failed");
+                return;
+            }
+
             let hints = plan(raws, &alphabet, layout_origin);
+
+            let mut t_plan_1 = 0i64;
+            if unsafe { QueryPerformanceCounter(&mut t_plan_1) }.is_err() {
+                eprintln!("[plan] QueryPerformanceCounter (end) failed");
+                return;
+            }
+
+            let plan_ms = if freq > 0 {
+                (t_plan_1.saturating_sub(t_plan_0) as f64) * 1000.0 / freq as f64
+            } else {
+                0.0
+            };
+
+            eprintln!("[plan] plan_ms={:.2}", plan_ms);
+
+            let pipeline_total_ms = if freq > 0 {
+                (t_plan_1.saturating_sub(t0) as f64) * 1000.0 / freq as f64
+            } else {
+                0.0
+            };
+
+            eprintln!("[pipeline] total_ms={:.2}", pipeline_total_ms);
+
             let mut sess = nav_core::Session::new(l.overlay_session);
             sess.ingest(hints);
             let initial = sess.visible_hints();
