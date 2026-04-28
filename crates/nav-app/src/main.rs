@@ -130,6 +130,10 @@ fn main() -> std::process::ExitCode {
     let app = Arc::new(Mutex::new(AppState {
         alphabet,
         enum_opts,
+        hint_cache_ttl_ms: cfg.hints.hint_cache_ttl_ms,
+        pipeline_soft_budget_ms: cfg.hints.pipeline_soft_budget_ms as f64,
+        pipeline_hard_budget_ms: cfg.hints.pipeline_hard_budget_ms as f64,
+        hint_cache: None,
     }));
     let last_focus: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
 
@@ -164,6 +168,10 @@ fn main() -> std::process::ExitCode {
             *app.lock().expect("state") = AppState {
                 alphabet: alph,
                 enum_opts: opts,
+                hint_cache_ttl_ms: c.hints.hint_cache_ttl_ms,
+                pipeline_soft_budget_ms: c.hints.pipeline_soft_budget_ms as f64,
+                pipeline_hard_budget_ms: c.hints.pipeline_hard_budget_ms as f64,
+                hint_cache: None,
             };
             if let Err(e) = input.reregister_hotkey(&c.hotkey.chord) {
                 eprintln!("[config] reload: hotkey: {e}");
@@ -259,9 +267,22 @@ struct CliSnapshot {
 }
 
 #[cfg(windows)]
+struct HintSessionCache {
+    hwnd: usize,
+    pid: u32,
+    raws_deduped: Vec<nav_core::RawHint>,
+    debug_rejects: Vec<nav_core::UiaDebugReject>,
+    at: std::time::Instant,
+}
+
+#[cfg(windows)]
 struct AppState {
     alphabet: Vec<char>,
     enum_opts: nav_uia::EnumOptions,
+    hint_cache_ttl_ms: u64,
+    pipeline_soft_budget_ms: f64,
+    pipeline_hard_budget_ms: f64,
+    hint_cache: Option<HintSessionCache>,
 }
 
 #[cfg(windows)]
@@ -273,11 +294,26 @@ fn parse_enumeration_profile(s: &str) -> nav_uia::EnumerationProfile {
 }
 
 #[cfg(windows)]
+fn parse_enumeration_ladder(s: &str) -> nav_uia::EnumerationStrategyMode {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "uia_first" | "uiafirst" | "uia" => nav_uia::EnumerationStrategyMode::UiaFirst,
+        "win32_first" | "win32first" | "hwnd_first" | "win32" => {
+            nav_uia::EnumerationStrategyMode::Win32First
+        }
+        "chromium_fast" | "chromium" | "electron" => {
+            nav_uia::EnumerationStrategyMode::ChromiumFast
+        }
+        _ => nav_uia::EnumerationStrategyMode::Auto,
+    }
+}
+
+#[cfg(windows)]
 fn build_enum_opts(cfg: &nav_config::Config, cli: &CliSnapshot) -> nav_uia::EnumOptions {
     nav_uia::EnumOptions {
         max_elements: cfg.hints.max_elements,
         profile: parse_enumeration_profile(&cfg.hints.enumeration_profile),
         materialize_hard_budget_ms: cfg.hints.materialize_budget_ms,
+        strategy_mode: parse_enumeration_ladder(&cfg.hints.enumeration_ladder),
         budget_uia_ms: cfg.fallback.budget_ms.uia,
         budget_msaa_ms: cfg.fallback.budget_ms.msaa,
         budget_hwnd_ms: cfg.fallback.budget_ms.hwnd,
@@ -412,76 +448,119 @@ fn dispatch_input(
 
             let mut t0 = 0i64;
             if unsafe { QueryPerformanceCounter(&mut t0) }.is_err() {
-                eprintln!("[uia] QueryPerformanceCounter failed");
+                eprintln!("[pipeline] QueryPerformanceCounter failed");
                 return;
             }
 
-            let enum_opts = app.lock().expect("state").enum_opts.clone();
-            let enum_res = uia.enumerate(hwnd, &enum_opts);
+            let probe = nav_uia::probe_window(hwnd);
 
-            let mut t1 = 0i64;
-            if unsafe { QueryPerformanceCounter(&mut t1) }.is_err() {
-                eprintln!("[uia] QueryPerformanceCounter (end) failed");
-                return;
-            }
-
-            let enumerate_total_ms = if freq > 0 {
-                (t1.saturating_sub(t0) as f64) * 1000.0 / freq as f64
-            } else {
-                0.0
+            let cache_hit = {
+                let st = app.lock().expect("state");
+                st.hint_cache.as_ref().is_some_and(|c| {
+                    c.hwnd == p.captured_hwnd
+                        && c.pid == probe.pid
+                        && c.at.elapsed()
+                            < std::time::Duration::from_millis(st.hint_cache_ttl_ms.max(1))
+                })
             };
 
-            let NavEnumerateResult {
-                hints: raws_in,
-                debug_rejects,
-                ..
-            } = match enum_res {
-                Ok(res) => {
-                    print!(
-                        "[uia] hwnd=0x{:x} elements={} enumerate_total_ms={:.2}",
-                        p.captured_hwnd,
-                        res.hints.len(),
-                        enumerate_total_ms
-                    );
-                    if let Some(ref t) = res.timings_ms {
-                        print!(
-                            " findall_ms={:.2} materialize_ms={:.2}",
-                            t.findall_ms, t.materialize_ms
-                        );
-                    }
-                    println!();
-                    res
-                }
-                Err(e) => {
-                    eprintln!("[uia] error: {e}");
+            let (raws, debug_rejects) = if cache_hit {
+                let (raws_deduped, dbg, age_ms) = {
+                    let st = app.lock().expect("state");
+                    let c = st.hint_cache.as_ref().expect("cache");
+                    (
+                        c.raws_deduped.clone(),
+                        c.debug_rejects.clone(),
+                        c.at.elapsed().as_secs_f64() * 1000.0,
+                    )
+                };
+                eprintln!(
+                    "[cache_hit] hwnd=0x{:x} pid={} age_ms={:.1}",
+                    p.captured_hwnd, probe.pid, age_ms
+                );
+                eprintln!("[dedupe] cache_hit=1 dedupe_ms=0.00");
+                (raws_deduped, dbg)
+            } else {
+                let enum_opts = app.lock().expect("state").enum_opts.clone();
+                let enum_res = uia.enumerate(hwnd, &enum_opts);
+
+                let mut t1 = 0i64;
+                if unsafe { QueryPerformanceCounter(&mut t1) }.is_err() {
+                    eprintln!("[enumerate] QueryPerformanceCounter (end) failed");
                     return;
                 }
+
+                let enumerate_total_ms = if freq > 0 {
+                    (t1.saturating_sub(t0) as f64) * 1000.0 / freq as f64
+                } else {
+                    0.0
+                };
+
+                let NavEnumerateResult {
+                    hints: raws_in,
+                    debug_rejects,
+                    ..
+                } = match enum_res {
+                    Ok(res) => {
+                        print!(
+                            "[enumerate] hwnd=0x{:x} elements={} enumerate_total_ms={:.2}",
+                            p.captured_hwnd,
+                            res.hints.len(),
+                            enumerate_total_ms
+                        );
+                        if let Some(ref t) = res.timings_ms {
+                            print!(
+                                " findall_ms={:.2} materialize_ms={:.2}",
+                                t.findall_ms, t.materialize_ms
+                            );
+                        }
+                        println!();
+                        res
+                    }
+                    Err(e) => {
+                        eprintln!("[enumerate] error: {e}");
+                        return;
+                    }
+                };
+
+                let mut t_dedupe_0 = 0i64;
+                if unsafe { QueryPerformanceCounter(&mut t_dedupe_0) }.is_err() {
+                    eprintln!("[dedupe] QueryPerformanceCounter failed");
+                    return;
+                }
+
+                let (raws, dedupe_stats) = nav_core::dedupe_raw_hints(raws_in);
+
+                let mut t_dedupe_1 = 0i64;
+                if unsafe { QueryPerformanceCounter(&mut t_dedupe_1) }.is_err() {
+                    eprintln!("[dedupe] QueryPerformanceCounter (end) failed");
+                    return;
+                }
+
+                let dedupe_ms = if freq > 0 {
+                    (t_dedupe_1.saturating_sub(t_dedupe_0) as f64) * 1000.0 / freq as f64
+                } else {
+                    0.0
+                };
+
+                eprintln!(
+                    "[dedupe] before={} after={} removed={} dedupe_ms={:.2}",
+                    dedupe_stats.before, dedupe_stats.after, dedupe_stats.removed, dedupe_ms
+                );
+
+                {
+                    let mut st = app.lock().expect("state");
+                    st.hint_cache = Some(HintSessionCache {
+                        hwnd: p.captured_hwnd,
+                        pid: probe.pid,
+                        raws_deduped: raws.clone(),
+                        debug_rejects: debug_rejects.clone(),
+                        at: std::time::Instant::now(),
+                    });
+                }
+
+                (raws, debug_rejects)
             };
-
-            let mut t_dedupe_0 = 0i64;
-            if unsafe { QueryPerformanceCounter(&mut t_dedupe_0) }.is_err() {
-                eprintln!("[dedupe] QueryPerformanceCounter failed");
-                return;
-            }
-
-            let (raws, dedupe_stats) = nav_core::dedupe_raw_hints(raws_in);
-
-            let mut t_dedupe_1 = 0i64;
-            if unsafe { QueryPerformanceCounter(&mut t_dedupe_1) }.is_err() {
-                eprintln!("[dedupe] QueryPerformanceCounter (end) failed");
-                return;
-            }
-
-            let dedupe_ms = if freq > 0 {
-                (t_dedupe_1.saturating_sub(t_dedupe_0) as f64) * 1000.0 / freq as f64
-            } else {
-                0.0
-            };
-
-            eprintln!(
-                "[dedupe] before={} after={} removed={} dedupe_ms={:.2}",
-                dedupe_stats.before, dedupe_stats.after, dedupe_stats.removed, dedupe_ms
-            );
 
             let mut wr = windows::Win32::Foundation::RECT::default();
             let layout_origin = if unsafe { GetWindowRect(hwnd, &mut wr) }.is_ok() {
@@ -524,6 +603,8 @@ fn dispatch_input(
 
             eprintln!("[plan] plan_ms={:.2}", plan_ms);
 
+            eprintln!("[layout] hints_planned={}", hints.len());
+
             let pipeline_total_ms = if freq > 0 {
                 (t_plan_1.saturating_sub(t0) as f64) * 1000.0 / freq as f64
             } else {
@@ -531,6 +612,22 @@ fn dispatch_input(
             };
 
             eprintln!("[pipeline] total_ms={:.2}", pipeline_total_ms);
+
+            let (soft, hard) = {
+                let st = app.lock().expect("state");
+                (st.pipeline_soft_budget_ms, st.pipeline_hard_budget_ms)
+            };
+            if pipeline_total_ms > hard {
+                eprintln!(
+                    "[pipeline] HARD budget exceeded total_ms={:.2} hard_ms={:.2} pid={} exe={}",
+                    pipeline_total_ms, hard, probe.pid, probe.exe_basename
+                );
+            } else if pipeline_total_ms > soft {
+                eprintln!(
+                    "[pipeline] soft budget exceeded total_ms={:.2} soft_ms={:.2} pid={} exe={}",
+                    pipeline_total_ms, soft, probe.pid, probe.exe_basename
+                );
+            }
 
             let mut sess = nav_core::Session::new(l.overlay_session);
             sess.ingest(hints);
@@ -570,6 +667,11 @@ fn dispatch_input(
             l.session = Some(sess);
             l.session_hwnd = Some(hwnd);
             input.hint_mode.store(true, Ordering::Release);
+            eprintln!(
+                "[render] show_ok session_id={} pills={}",
+                l.overlay_session,
+                initial.len()
+            );
         }
         nav_input::InputEvent::SessionKey(sk) => {
             if !input.hint_mode.load(Ordering::Acquire) {
