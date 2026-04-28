@@ -19,6 +19,7 @@ use crate::hint::{Hint, HintId};
 ///         uia_invoke_hwnd: None,
 ///         uia_child_index: None,
 ///         bounds: Rect { x: 0, y: 0, w: 1, h: 1 },
+///         anchor_px: None,
 ///         kind: ElementKind::Invoke,
 ///         name: None,
 ///         backend: Backend::Uia,

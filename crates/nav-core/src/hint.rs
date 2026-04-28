@@ -28,6 +28,9 @@ pub struct RawHint {
     /// then `FindAllBuildCache(Descendants).GetElement(element_id)`.
     pub uia_child_index: Option<u32>,
     pub bounds: Rect,
+    /// Physical-screen point this hint refers to (clickable point when known). If `None`, use
+    /// [`crate::anchor::fallback_anchor_px`] with [`bounds`](Self::bounds).
+    pub anchor_px: Option<(i32, i32)>,
     pub kind: ElementKind,
     pub name: Option<Box<str>>,
     pub backend: Backend,

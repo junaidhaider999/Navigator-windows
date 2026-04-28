@@ -23,6 +23,7 @@ fn one_hint_session() -> Session {
             w: 10,
             h: 10,
         },
+        anchor_px: None,
         kind: ElementKind::Invoke,
         name: None,
         backend: Backend::Uia,

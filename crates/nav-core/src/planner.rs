@@ -23,6 +23,7 @@ const W_SIZE: f32 = 0.2;
 ///     uia_invoke_hwnd: None,
 ///     uia_child_index: None,
 ///     bounds: Rect { x: 0, y: 0, w: 50, h: 20 },
+///     anchor_px: None,
 ///     kind: ElementKind::Invoke,
 ///     name: None,
 ///     backend: Backend::Uia,

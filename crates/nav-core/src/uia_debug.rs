@@ -12,9 +12,17 @@ pub struct UiaDebugReject {
     pub reason: Box<str>,
 }
 
+/// Split timings for UIA `FindAllBuildCache` vs post-fetch materialization (Rust-side loop).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiaEnumerateTimingsMs {
+    pub findall_ms: f64,
+    pub materialize_ms: f64,
+}
+
 /// Result of a full UIA enumeration pass including optional reject geometry for tooling.
 #[derive(Clone, Debug, Default)]
 pub struct NavEnumerateResult {
     pub hints: Vec<RawHint>,
     pub debug_rejects: Vec<UiaDebugReject>,
+    pub timings_ms: Option<UiaEnumerateTimingsMs>,
 }

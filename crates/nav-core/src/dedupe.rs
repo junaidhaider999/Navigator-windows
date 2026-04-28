@@ -221,6 +221,7 @@ mod tests {
             uia_invoke_hwnd: None,
             uia_child_index: None,
             bounds: Rect { x, y, w, h: h_ },
+            anchor_px: None,
             kind,
             name: name.map(|s| s.into()),
             backend: Backend::Uia,

@@ -14,6 +14,7 @@ fn raw_at(i: u64, x: i32) -> RawHint {
             w: 20,
             h: 20,
         },
+        anchor_px: None,
         kind: ElementKind::Invoke,
         name: None,
         backend: Backend::Uia,
