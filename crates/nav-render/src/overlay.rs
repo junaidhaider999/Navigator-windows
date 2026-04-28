@@ -20,8 +20,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use crate::RenderError;
 use crate::OverlayRenderOpts;
+use crate::RenderError;
 use crate::d2d::D2dCompositionRenderer;
 use crate::monitors::{enumerate_monitor_rects, physical_point_in_monitor_rect};
 
@@ -323,11 +323,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     st.sync_to_monitors()?;
                     for s in &mut st.slots {
                         if let Some(ref mut g) = s.gpu {
-                            g.update_and_present(
-                                &[],
-                                &[],
-                                crate::OverlayRenderOpts::default(),
-                            )?;
+                            g.update_and_present(&[], &[], crate::OverlayRenderOpts::default())?;
                         }
                         let _ = ShowWindow(s.hwnd, SW_HIDE);
                         s.visible = false;
@@ -422,12 +418,7 @@ pub fn run_render_thread(cmd_rx: Receiver<RenderCmd>) {
                     };
                     if let Some(ref lp) = last_painted {
                         if displayed_session == Some(lp.session_id) {
-                            present_partitioned(
-                                st,
-                                &lp.hints,
-                                &lp.debug_rejects,
-                                lp.opts,
-                            )?;
+                            present_partitioned(st, &lp.hints, &lp.debug_rejects, lp.opts)?;
                             return Ok(());
                         }
                     }

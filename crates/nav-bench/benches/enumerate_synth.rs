@@ -1,7 +1,10 @@
 //! Synthetic enumeration pipeline: raw list shape similar to a medium UIA tree (no COM).
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use nav_core::{Backend, ElementKind, RawHint, Rect, dedupe_raw_hints, fnv1a_hash_i32_slice, plan};
+use nav_core::{
+    Backend, ElementKind, RawHint, Rect, UiaEnumerateBasis, dedupe_raw_hints, fnv1a_hash_i32_slice,
+    plan,
+};
 
 fn synthetic_raws(n: usize) -> Vec<RawHint> {
     (0..n)
@@ -13,6 +16,7 @@ fn synthetic_raws(n: usize) -> Vec<RawHint> {
             ])),
             uia_invoke_hwnd: None,
             uia_child_index: None,
+            uia_enumerate_basis: UiaEnumerateBasis::default(),
             bounds: Rect {
                 x: (i % 64) as i32 * 12,
                 y: (i / 64) as i32 * 10,

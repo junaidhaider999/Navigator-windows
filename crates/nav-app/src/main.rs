@@ -305,9 +305,7 @@ fn parse_enumeration_ladder(s: &str) -> nav_uia::EnumerationStrategyMode {
         "win32_first" | "win32first" | "hwnd_first" | "win32" => {
             nav_uia::EnumerationStrategyMode::Win32First
         }
-        "chromium_fast" | "chromium" | "electron" => {
-            nav_uia::EnumerationStrategyMode::ChromiumFast
-        }
+        "chromium_fast" | "chromium" | "electron" => nav_uia::EnumerationStrategyMode::ChromiumFast,
         _ => nav_uia::EnumerationStrategyMode::Auto,
     }
 }
@@ -466,8 +464,7 @@ fn dispatch_input(
                     c.hwnd == p.captured_hwnd
                         && c.pid == probe.pid
                         && c.title_fp == cache_key.0
-                        && c.rect_ltrb
-                            == (cache_key.1, cache_key.2, cache_key.3, cache_key.4)
+                        && c.rect_ltrb == (cache_key.1, cache_key.2, cache_key.3, cache_key.4)
                         && c.at.elapsed()
                             < std::time::Duration::from_millis(st.hint_cache_ttl_ms.max(1))
                 })
@@ -524,6 +521,25 @@ fn dispatch_input(
                             );
                         }
                         println!();
+                        if let Some(ref c) = res.coverage {
+                            eprintln!(
+                                "[coverage] raw_nodes={} clickable_candidates={} visible={} after_filter={} final={}",
+                                c.raw_nodes,
+                                c.clickable_candidates,
+                                c.visible,
+                                c.after_filter,
+                                c.final_hints
+                            );
+                            eprintln!(
+                                "[profile_stats] invoke={} toggle={} selection={} expand={} editable={} generic={}",
+                                c.kind_invoke,
+                                c.kind_toggle,
+                                c.kind_select,
+                                c.kind_expand,
+                                c.kind_editable,
+                                c.kind_generic
+                            );
+                        }
                         res
                     }
                     Err(e) => {
@@ -601,7 +617,16 @@ fn dispatch_input(
                 return;
             }
 
+            let n_ranked_in = raws.len();
             let hints = plan(raws, &alphabet, layout_origin, planner_cap);
+
+            if planner_cap > 0 && n_ranked_in > planner_cap {
+                eprintln!(
+                    "[hint_density] ranked_top={} hidden_count={}",
+                    hints.len(),
+                    n_ranked_in.saturating_sub(hints.len())
+                );
+            }
 
             let mut t_plan_1 = 0i64;
             if unsafe { QueryPerformanceCounter(&mut t_plan_1) }.is_err() {

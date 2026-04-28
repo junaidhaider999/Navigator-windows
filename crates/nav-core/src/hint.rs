@@ -13,6 +13,16 @@ use crate::geom::Rect;
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct HintId(pub u32);
 
+/// How [`RawHint::element_id`] maps to a UIA `FindAll` result (must match the enumeration pass and invoke).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum UiaEnumerateBasis {
+    /// Index into `root.FindAllBuildCache(TreeScope_Descendants, find_cond, …)`.
+    #[default]
+    RootDescendantsOrder,
+    /// Index into `root.FindAllBuildCache(TreeScope_Children, find_cond, …)` (shallow-first path).
+    RootChildrenOrder,
+}
+
 /// One actionable region discovered by an enumerator (UIA, MSAA, or HWND walk).
 #[derive(Clone, Debug, PartialEq)]
 pub struct RawHint {
@@ -27,6 +37,8 @@ pub struct RawHint {
     /// index of the session root: invoke resolves `root.FindAllBuildCache(Children).GetElement(j)`
     /// then `FindAllBuildCache(Descendants).GetElement(element_id)`.
     pub uia_child_index: Option<u32>,
+    /// UIA only: which `FindAll` ordering [`element_id`](Self::element_id) uses; ignored for other backends.
+    pub uia_enumerate_basis: UiaEnumerateBasis,
     pub bounds: Rect,
     /// Physical-screen point this hint refers to (clickable point when known). If `None`, use
     /// [`crate::anchor::fallback_anchor_px`] with [`bounds`](Self::bounds).

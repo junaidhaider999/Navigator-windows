@@ -224,7 +224,7 @@ pub fn fnv1a_hash_i32_slice(parts: &[i32]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hint::Backend;
+    use crate::hint::{Backend, ElementKind, UiaEnumerateBasis};
 
     #[allow(clippy::too_many_arguments)]
     fn h(
@@ -242,6 +242,7 @@ mod tests {
             uia_runtime_id_fp: fp,
             uia_invoke_hwnd: None,
             uia_child_index: None,
+            uia_enumerate_basis: UiaEnumerateBasis::default(),
             bounds: Rect { x, y, w, h: h_ },
             anchor_px: None,
             kind,

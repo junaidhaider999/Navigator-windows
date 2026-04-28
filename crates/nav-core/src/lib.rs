@@ -5,10 +5,10 @@
 //! # Legacy parity
 //! Hint label distribution matches Hunt-and-Peck / vimium-style behavior; see [`label`](crate::label).
 
+pub mod anchor;
 pub mod dedupe;
 pub mod error;
 pub mod filter;
-pub mod anchor;
 pub mod geom;
 pub mod hint;
 pub mod label;
@@ -16,13 +16,13 @@ pub mod planner;
 pub mod session;
 pub mod uia_debug;
 
+pub use anchor::fallback_anchor_px;
 pub use dedupe::{DedupeStats, dedupe_raw_hints, fnv1a_hash_i32_slice};
 pub use error::NavError;
 pub use filter::{FilterResult, filter};
-pub use anchor::fallback_anchor_px;
 pub use geom::Rect;
-pub use hint::{Backend, ElementKind, Hint, HintId, RawHint};
+pub use hint::{Backend, ElementKind, Hint, HintId, RawHint, UiaEnumerateBasis};
 pub use label::generate_labels;
 pub use planner::plan;
 pub use session::{Session, SessionEvent};
-pub use uia_debug::{NavEnumerateResult, UiaDebugReject, UiaEnumerateTimingsMs};
+pub use uia_debug::{NavEnumerateResult, UiaCoverageStats, UiaDebugReject, UiaEnumerateTimingsMs};

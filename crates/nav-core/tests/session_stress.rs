@@ -1,6 +1,6 @@
 //! Random keystroke stress (A3): must not panic or violate session invariants.
 
-use nav_core::{Backend, ElementKind, RawHint, Rect, Session, plan};
+use nav_core::{Backend, ElementKind, RawHint, Rect, Session, UiaEnumerateBasis, plan};
 
 fn sample_session(n: usize) -> Session {
     let mut raws = Vec::with_capacity(n);
@@ -10,6 +10,7 @@ fn sample_session(n: usize) -> Session {
             uia_runtime_id_fp: None,
             uia_invoke_hwnd: None,
             uia_child_index: None,
+            uia_enumerate_basis: UiaEnumerateBasis::default(),
             bounds: Rect {
                 x: (i as i32) * 8,
                 y: 0,

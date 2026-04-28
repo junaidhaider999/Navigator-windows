@@ -11,17 +11,17 @@ use windows::Win32::UI::Accessibility::{
     AutomationElementMode_Full, AutomationElementMode_None, IUIAutomation,
     IUIAutomationCacheRequest, IUIAutomationCondition, TreeScope_Element,
     UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId,
-    UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId, UIA_EditControlTypeId,
-    UIA_ExpandCollapsePatternId, UIA_HyperlinkControlTypeId, UIA_InvokePatternId,
-    UIA_IsEnabledPropertyId, UIA_IsExpandCollapsePatternAvailablePropertyId,
+    UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId, UIA_CustomControlTypeId,
+    UIA_EditControlTypeId, UIA_ExpandCollapsePatternId, UIA_HyperlinkControlTypeId,
+    UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsExpandCollapsePatternAvailablePropertyId,
     UIA_IsInvokePatternAvailablePropertyId, UIA_IsKeyboardFocusablePropertyId,
     UIA_IsLegacyIAccessiblePatternAvailablePropertyId, UIA_IsOffscreenPropertyId,
     UIA_IsSelectionItemPatternAvailablePropertyId, UIA_IsTogglePatternAvailablePropertyId,
     UIA_IsValuePatternAvailablePropertyId, UIA_LegacyIAccessiblePatternId,
-    UIA_ListItemControlTypeId, UIA_MenuItemControlTypeId, UIA_NamePropertyId, UIA_PROPERTY_ID,
-    UIA_RadioButtonControlTypeId, UIA_SelectionItemPatternId, UIA_SplitButtonControlTypeId,
-    UIA_TabItemControlTypeId, UIA_TextControlTypeId, UIA_TogglePatternId, UIA_TreeItemControlTypeId,
-    UIA_ValuePatternId,
+    UIA_ListItemControlTypeId, UIA_MenuBarControlTypeId, UIA_MenuItemControlTypeId,
+    UIA_NamePropertyId, UIA_PROPERTY_ID, UIA_RadioButtonControlTypeId, UIA_SelectionItemPatternId,
+    UIA_SplitButtonControlTypeId, UIA_TabItemControlTypeId, UIA_TextControlTypeId,
+    UIA_TogglePatternId, UIA_ToolBarControlTypeId, UIA_TreeItemControlTypeId, UIA_ValuePatternId,
 };
 
 use crate::UiaError;
@@ -185,6 +185,9 @@ fn create_invoke_targets_full(
             UIA_SplitButtonControlTypeId.0,
             UIA_ComboBoxControlTypeId.0,
             UIA_EditControlTypeId.0,
+            UIA_CustomControlTypeId.0,
+            UIA_ToolBarControlTypeId.0,
+            UIA_MenuBarControlTypeId.0,
         ];
         let ct_or = or_control_types(automation, &focus_types, variant_i4)?;
         let kb = automation

@@ -3,7 +3,7 @@
 
 use core::ffi::c_void;
 
-use nav_core::{ElementKind, Hint};
+use nav_core::{Backend, ElementKind, Hint, UiaEnumerateBasis};
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::UI::Accessibility::{
     ExpandCollapseState_Collapsed, ExpandCollapseState_LeafNode,
@@ -104,6 +104,21 @@ fn resolve_enumerated_element(
         let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
         bounds_check(idx, len)?;
         unsafe { all.GetElement(idx) }.map_err(|e| UiaError::Operation(e.to_string()))?
+    } else if hint.raw.backend == Backend::Uia
+        && matches!(
+            hint.raw.uia_enumerate_basis,
+            UiaEnumerateBasis::RootChildrenOrder
+        )
+    {
+        let root = unsafe { automation.ElementFromHandle(hwnd) }
+            .map_err(|e| UiaError::Operation(e.to_string()))?;
+        let kids = unsafe {
+            root.FindAllBuildCache(TreeScope_Children, find_descendants_cond, find_cache)
+        }
+        .map_err(|e| UiaError::Operation(format!("FindAllBuildCache Children (basis): {e}")))?;
+        let len = unsafe { kids.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
+        bounds_check(idx, len)?;
+        unsafe { kids.GetElement(idx) }.map_err(|e| UiaError::Operation(e.to_string()))?
     } else {
         let root = unsafe { automation.ElementFromHandle(hwnd) }
             .map_err(|e| UiaError::Operation(e.to_string()))?;
@@ -139,10 +154,7 @@ fn dispatch_with_fallbacks(
         }
     }
     invoke_click_hint(&hint.raw)?;
-    eprintln!(
-        "[invoke] hint={} fallback=SendInputClick",
-        hint.label
-    );
+    eprintln!("[invoke] hint={} fallback=SendInputClick", hint.label);
     Ok("SendInputClick")
 }
 
@@ -303,10 +315,7 @@ fn dispatch_primary(el: &IUIAutomationElement, hint: &Hint) -> Result<&'static s
                 .map_err(|e| UiaError::Operation(e.to_string()))?;
             if state == ExpandCollapseState_LeafNode {
                 invoke_click_hint(&hint.raw)?;
-                eprintln!(
-                    "[invoke] hint={} fallback=SendInputClick",
-                    hint.label
-                );
+                eprintln!("[invoke] hint={} fallback=SendInputClick", hint.label);
                 Ok("SendInputClick")
             } else if state == ExpandCollapseState_Collapsed
                 || state == ExpandCollapseState_PartiallyExpanded
@@ -350,10 +359,7 @@ fn dispatch_primary(el: &IUIAutomationElement, hint: &Hint) -> Result<&'static s
                 }
             }
             invoke_click_hint(&hint.raw)?;
-            eprintln!(
-                "[invoke] hint={} fallback=SendInputClick",
-                hint.label
-            );
+            eprintln!("[invoke] hint={} fallback=SendInputClick", hint.label);
             Ok("SendInputClick")
         }
         ElementKind::Editable => {
@@ -370,10 +376,7 @@ fn dispatch_primary(el: &IUIAutomationElement, hint: &Hint) -> Result<&'static s
             }
             match invoke_click_hint(&hint.raw) {
                 Ok(()) => {
-                    eprintln!(
-                        "[invoke] hint={} fallback=SendInputClick",
-                        hint.label
-                    );
+                    eprintln!("[invoke] hint={} fallback=SendInputClick", hint.label);
                     Ok("SendInputClick")
                 }
                 Err(e_click) => {
@@ -382,10 +385,7 @@ fn dispatch_primary(el: &IUIAutomationElement, hint: &Hint) -> Result<&'static s
                             "SetFocus after SendInput failed ({e_click}); SetFocus: {e}"
                         ))
                     })?;
-                    eprintln!(
-                        "[invoke] hint={} backend=UIA mode=SetFocus",
-                        hint.label
-                    );
+                    eprintln!("[invoke] hint={} backend=UIA mode=SetFocus", hint.label);
                     Ok("SetFocus")
                 }
             }

@@ -6,7 +6,7 @@ use std::path::Path;
 
 use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
@@ -45,9 +45,7 @@ fn basename_from_wide_path(path_wide_hint: &[u16]) -> String {
 }
 
 fn read_process_path(pid: u32) -> Option<String> {
-    let Ok(h) = (unsafe {
-        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
-    }) else {
+    let Ok(h) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else {
         return None;
     };
     let mut buf = vec![0u16; 4096];
@@ -75,9 +73,7 @@ fn read_class_name(hwnd: HWND) -> String {
         return String::new();
     }
     let slice = &buf[..n as usize];
-    OsString::from_wide(slice)
-        .to_string_lossy()
-        .into_owned()
+    OsString::from_wide(slice).to_string_lossy().into_owned()
 }
 
 fn is_chromium_family(class: &str, exe_base: &str) -> bool {
@@ -150,10 +146,7 @@ pub fn resolve_enumeration_behavior(
     probe: &WindowProbe,
 ) -> (ResolvedLadder, bool /* disable_uia_parallel */) {
     match mode {
-        EnumerationStrategyMode::Auto => (
-            probe.suggested_ladder,
-            probe.suggested_disable_parallel,
-        ),
+        EnumerationStrategyMode::Auto => (probe.suggested_ladder, probe.suggested_disable_parallel),
         EnumerationStrategyMode::UiaFirst => (ResolvedLadder::UiaFirst, false),
         EnumerationStrategyMode::Win32First => (ResolvedLadder::Win32First, false),
         EnumerationStrategyMode::ChromiumFast => (ResolvedLadder::UiaFirst, true),

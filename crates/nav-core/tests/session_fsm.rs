@@ -1,6 +1,9 @@
 //! State coverage for `01-architecture.md` post-enumeration behaviour (Visible → Filtered → Invoke / Done).
 
-use nav_core::{Backend, ElementKind, Hint, RawHint, Rect, Session, SessionEvent, filter, plan};
+use nav_core::{
+    Backend, ElementKind, Hint, RawHint, Rect, Session, SessionEvent, UiaEnumerateBasis, filter,
+    plan,
+};
 
 fn raw_at(i: u64, x: i32) -> RawHint {
     RawHint {
@@ -8,6 +11,7 @@ fn raw_at(i: u64, x: i32) -> RawHint {
         uia_runtime_id_fp: None,
         uia_invoke_hwnd: None,
         uia_child_index: None,
+        uia_enumerate_basis: UiaEnumerateBasis::default(),
         bounds: Rect {
             x,
             y: 0,

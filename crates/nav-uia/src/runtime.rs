@@ -177,8 +177,7 @@ impl UiaRuntime {
         let probe = probe_window(hwnd);
         let mut opts_eff = opts.clone();
         apply_exe_profile(&probe.exe_basename, &mut opts_eff);
-        let (ladder, disable_parallel) =
-            resolve_enumeration_behavior(opts.strategy_mode, &probe);
+        let (ladder, disable_parallel) = resolve_enumeration_behavior(opts.strategy_mode, &probe);
         opts_eff.disable_uia_parallel = disable_parallel;
 
         eprintln!(
@@ -213,6 +212,7 @@ impl UiaRuntime {
                     hints,
                     debug_rejects: Vec::new(),
                     timings_ms: None,
+                    coverage: None,
                 })
             }
             FallbackPolicy::UiaOnly => {
@@ -283,6 +283,7 @@ impl UiaRuntime {
                             hints: msaa,
                             debug_rejects: r.debug_rejects,
                             timings_ms: None,
+                            coverage: None,
                         });
                     }
 
@@ -304,6 +305,7 @@ impl UiaRuntime {
                         hints: hwnd_hints,
                         debug_rejects: r.debug_rejects,
                         timings_ms: None,
+                        coverage: None,
                     })
                 }
                 ResolvedLadder::Win32First => {
@@ -335,6 +337,7 @@ impl UiaRuntime {
                                 opts_eff.explorer_enrich_if_below
                             );
                             let mut eu = opts_eff.clone();
+                            eu.profile = EnumerationProfile::Full;
                             eu.materialize_hard_budget_ms = opts_eff
                                 .explorer_enrich_materialize_budget_ms
                                 .min(opts_eff.materialize_hard_budget_ms);
@@ -358,12 +361,14 @@ impl UiaRuntime {
                                 hints: merged,
                                 debug_rejects: enrich.debug_rejects,
                                 timings_ms: enrich.timings_ms,
+                                coverage: enrich.coverage,
                             });
                         }
                         return Ok(NavEnumerateResult {
                             hints: merged,
                             debug_rejects: Vec::new(),
                             timings_ms: None,
+                            coverage: None,
                         });
                     }
 
@@ -386,6 +391,7 @@ impl UiaRuntime {
                             hints: msaa,
                             debug_rejects: Vec::new(),
                             timings_ms: None,
+                            coverage: None,
                         });
                     }
 
@@ -430,9 +436,12 @@ impl UiaRuntime {
     /// `opts` must match the [`EnumOptions`] used for the preceding [`UiaRuntime::enumerate`] call
     /// so descendant filtering stays consistent with `element_id`.
     pub fn invoke(&self, hwnd: UiaHwnd, hint: &Hint, opts: &EnumOptions) -> Result<(), UiaError> {
+        let probe = probe_window(hwnd);
+        let mut opts_eff = opts.clone();
+        apply_exe_profile(&probe.exe_basename, &mut opts_eff);
         match hint.raw.backend {
             Backend::Uia => {
-                let find_cond = self.find_descendants_condition(opts)?;
+                let find_cond = self.find_descendants_condition(&opts_eff)?;
                 invoke_invoke_pattern(
                     &self.automation,
                     hwnd,
@@ -443,7 +452,9 @@ impl UiaRuntime {
             }
             Backend::Msaa => {
                 eprintln!("[invoke] hint={} backend=MSAA", hint.label);
-                unsafe { invoke_msaa_at(hwnd, hint.raw.element_id, GetForegroundWindow(), opts) }
+                unsafe {
+                    invoke_msaa_at(hwnd, hint.raw.element_id, GetForegroundWindow(), &opts_eff)
+                }
             }
             Backend::RawHwnd => {
                 eprintln!(

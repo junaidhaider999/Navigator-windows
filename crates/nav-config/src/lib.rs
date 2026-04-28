@@ -313,9 +313,18 @@ mod tests {
         let def = Config::default();
         assert_eq!(parsed.hints.alphabet, def.hints.alphabet);
         assert_eq!(parsed.hints.max_elements, def.hints.max_elements);
-        assert_eq!(parsed.hints.enumeration_profile, def.hints.enumeration_profile);
-        assert_eq!(parsed.hints.materialize_budget_ms, def.hints.materialize_budget_ms);
-        assert_eq!(parsed.hints.enumeration_ladder, def.hints.enumeration_ladder);
+        assert_eq!(
+            parsed.hints.enumeration_profile,
+            def.hints.enumeration_profile
+        );
+        assert_eq!(
+            parsed.hints.materialize_budget_ms,
+            def.hints.materialize_budget_ms
+        );
+        assert_eq!(
+            parsed.hints.enumeration_ladder,
+            def.hints.enumeration_ladder
+        );
         assert_eq!(parsed.hints.hint_cache_ttl_ms, def.hints.hint_cache_ttl_ms);
         assert_eq!(
             parsed.hints.pipeline_soft_budget_ms,
@@ -330,7 +339,10 @@ mod tests {
         assert_eq!(parsed.fallback.budget_ms.uia, def.fallback.budget_ms.uia);
         assert_eq!(parsed.render.debug_connectors, def.render.debug_connectors);
         assert_eq!(parsed.render.debug_target_dot, def.render.debug_target_dot);
-        assert_eq!(parsed.render.debug_target_rect, def.render.debug_target_rect);
+        assert_eq!(
+            parsed.render.debug_target_rect,
+            def.render.debug_target_rect
+        );
         assert_eq!(parsed.render.debug_distance, def.render.debug_distance);
     }
 }

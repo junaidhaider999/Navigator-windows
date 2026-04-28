@@ -10,8 +10,8 @@ pub mod options;
 pub use error::UiaError;
 pub use hwnd::UiaHwnd;
 pub use options::{
-    EnumOptions, EnumerationProfile, EnumerationStrategyMode, FallbackPolicy, M9_DEFAULT_BUDGET_HWND_MS,
-    M9_DEFAULT_BUDGET_MSAA_MS, M9_DEFAULT_BUDGET_UIA_MS,
+    EnumOptions, EnumerationProfile, EnumerationStrategyMode, FallbackPolicy,
+    M9_DEFAULT_BUDGET_HWND_MS, M9_DEFAULT_BUDGET_MSAA_MS, M9_DEFAULT_BUDGET_UIA_MS,
 };
 
 #[cfg(windows)]
@@ -43,7 +43,7 @@ mod strategy;
 pub use runtime::UiaRuntime;
 #[cfg(windows)]
 pub use strategy::{
-    probe_window, resolve_enumeration_behavior, window_cache_key, ResolvedLadder, WindowProbe,
+    ResolvedLadder, WindowProbe, probe_window, resolve_enumeration_behavior, window_cache_key,
 };
 
 #[cfg(not(windows))]

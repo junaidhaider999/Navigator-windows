@@ -43,8 +43,8 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
 use windows::core::{Interface, w};
 
-use crate::RenderError;
 use crate::OverlayRenderOpts;
+use crate::RenderError;
 use crate::scene::{self, DebugRegionGeom, PillGeom};
 
 const FRAME_BUDGET: Duration = Duration::from_millis(4);
@@ -345,7 +345,8 @@ impl D2dCompositionRenderer {
         let cw = client_w_dips(self.pixel_w, self.dpi);
         let ch = client_h_dips(self.pixel_h, self.dpi);
         let origin = window_origin_phys(self.hwnd)?;
-        let new_pills = scene::pills_for_frame(hints, origin, cw, ch, self.dpi, opts.debug_connectors);
+        let new_pills =
+            scene::pills_for_frame(hints, origin, cw, ch, self.dpi, opts.debug_connectors);
         let new_debug = scene::debug_regions_for_frame(debug_rejects, origin, cw, ch, self.dpi);
         if matches!(
             scene::overlay_paint_plan(

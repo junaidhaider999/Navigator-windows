@@ -2,7 +2,7 @@
 
 use std::mem::ManuallyDrop;
 
-use nav_core::{Backend, ElementKind, RawHint, Rect, fallback_anchor_px};
+use nav_core::{Backend, ElementKind, RawHint, Rect, UiaEnumerateBasis, fallback_anchor_px};
 use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_I4};
 use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
@@ -142,6 +142,7 @@ unsafe fn walk_collect(
                 uia_runtime_id_fp: None,
                 uia_invoke_hwnd: None,
                 uia_child_index: None,
+                uia_enumerate_basis: UiaEnumerateBasis::default(),
                 bounds: loc,
                 anchor_px: Some(anchor),
                 kind,

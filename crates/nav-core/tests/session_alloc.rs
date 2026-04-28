@@ -9,7 +9,9 @@ use dhat::{Alloc, HeapStats, Profiler};
 #[global_allocator]
 static ALLOC: Alloc = Alloc;
 
-use nav_core::{Backend, ElementKind, RawHint, Rect, Session, SessionEvent, plan};
+use nav_core::{
+    Backend, ElementKind, RawHint, Rect, Session, SessionEvent, UiaEnumerateBasis, plan,
+};
 
 fn one_hint_session() -> Session {
     let raw = RawHint {
@@ -17,6 +19,7 @@ fn one_hint_session() -> Session {
         uia_runtime_id_fp: None,
         uia_invoke_hwnd: None,
         uia_child_index: None,
+        uia_enumerate_basis: UiaEnumerateBasis::default(),
         bounds: Rect {
             x: 0,
             y: 0,

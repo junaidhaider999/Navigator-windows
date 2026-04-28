@@ -19,10 +19,29 @@ pub struct UiaEnumerateTimingsMs {
     pub materialize_ms: f64,
 }
 
+/// Pipeline counters for stderr diagnostics (`[coverage]` / `[profile_stats]`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiaCoverageStats {
+    pub raw_nodes: usize,
+    pub clickable_candidates: usize,
+    /// Passed enabled + UIA offscreen gates (still on-screen per provider flag).
+    pub visible: usize,
+    /// Passed geom filters (min size, HWND center, optional client-area clip).
+    pub after_filter: usize,
+    pub final_hints: usize,
+    pub kind_invoke: usize,
+    pub kind_toggle: usize,
+    pub kind_select: usize,
+    pub kind_expand: usize,
+    pub kind_editable: usize,
+    pub kind_generic: usize,
+}
+
 /// Result of a full UIA enumeration pass including optional reject geometry for tooling.
 #[derive(Clone, Debug, Default)]
 pub struct NavEnumerateResult {
     pub hints: Vec<RawHint>,
     pub debug_rejects: Vec<UiaDebugReject>,
     pub timings_ms: Option<UiaEnumerateTimingsMs>,
+    pub coverage: Option<UiaCoverageStats>,
 }

@@ -33,4 +33,10 @@ impl Rect {
         let (bx, by) = other.center();
         (ax - bx).abs() + (ay - by).abs()
     }
+
+    /// True if the two axis-aligned rectangles overlap (edges touching count as overlap).
+    #[must_use]
+    pub fn intersects(self, o: Rect) -> bool {
+        self.x < o.x + o.w && self.x + self.w > o.x && self.y < o.y + o.h && self.y + self.h > o.y
+    }
 }

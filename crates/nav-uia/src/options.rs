@@ -72,6 +72,8 @@ pub struct EnumOptions {
     pub explorer_enrich_if_below: usize,
     /// Materialize budget for Explorer UIA enrich (ms).
     pub explorer_enrich_materialize_budget_ms: u64,
+    /// When true, drop UIA hints not intersecting the root HWND client rectangle (screen coords).
+    pub clip_uia_to_client_rect: bool,
 }
 
 impl Default for EnumOptions {
@@ -95,6 +97,7 @@ impl Default for EnumOptions {
             uia_shallow_materialize_budget_ms: 12,
             explorer_enrich_if_below: 0,
             explorer_enrich_materialize_budget_ms: 28,
+            clip_uia_to_client_rect: false,
         }
     }
 }

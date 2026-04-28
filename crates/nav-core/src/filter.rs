@@ -20,12 +20,13 @@ pub enum FilterResult<'a> {
 /// # Example
 ///
 /// ```
-/// use nav_core::{filter, FilterResult, Hint, RawHint, Rect, ElementKind, Backend};
+/// use nav_core::{filter, FilterResult, Hint, RawHint, Rect, ElementKind, Backend, UiaEnumerateBasis};
 /// let raw = RawHint {
 ///     element_id: 1,
 ///     uia_runtime_id_fp: None,
 ///     uia_invoke_hwnd: None,
 ///     uia_child_index: None,
+///     uia_enumerate_basis: UiaEnumerateBasis::default(),
 ///     bounds: Rect { x: 0, y: 0, w: 10, h: 10 },
 ///     anchor_px: None,
 ///     kind: ElementKind::Invoke,
@@ -57,7 +58,7 @@ pub fn filter<'a>(hints: &'a [Hint], prefix: &str) -> FilterResult<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Backend, ElementKind, RawHint, Rect};
+    use crate::{Backend, ElementKind, RawHint, Rect, UiaEnumerateBasis};
 
     fn sample_hints() -> Vec<Hint> {
         let raw = RawHint {
@@ -65,6 +66,7 @@ mod tests {
             uia_runtime_id_fp: None,
             uia_invoke_hwnd: None,
             uia_child_index: None,
+            uia_enumerate_basis: UiaEnumerateBasis::default(),
             bounds: Rect {
                 x: 0,
                 y: 0,

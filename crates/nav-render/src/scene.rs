@@ -14,8 +14,8 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1SolidColorBrush, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_LEADING, IDWriteFactory, IDWriteTextFormat,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, IDWriteFactory, IDWriteTextFormat,
 };
 use windows::core::Interface;
 
@@ -454,14 +454,7 @@ fn choose_pill_rect(
     client_h: f32,
     max_dist_dip: f32,
 ) -> Option<D2D_RECT_F> {
-    let bases = anchor_placement_candidates(
-        anchor.x,
-        anchor.y,
-        pw,
-        ph,
-        PLACE_GAP_DIPS,
-        target,
-    );
+    let bases = anchor_placement_candidates(anchor.x, anchor.y, pw, ph, PLACE_GAP_DIPS, target);
     let nudges = local_nudge_offsets();
     let mut best: Option<(f32, D2D_RECT_F)> = None;
 
@@ -908,12 +901,7 @@ pub unsafe fn draw_placement_truth(
             let label = format!("{d:.0}");
             let wlabel: Vec<u16> = label.encode_utf16().collect();
             let layout = write
-                .CreateTextLayout(
-                    &wlabel,
-                    text_format,
-                    48.0,
-                    PILL_FONT_EM_DIPS * 1.4,
-                )
+                .CreateTextLayout(&wlabel, text_format, 48.0, PILL_FONT_EM_DIPS * 1.4)
                 .map_err(|e| RenderError::Win32(e.to_string()))?;
             layout
                 .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)
@@ -940,7 +928,7 @@ pub unsafe fn draw_placement_truth(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nav_core::{Backend, ElementKind, RawHint, Rect};
+    use nav_core::{Backend, ElementKind, RawHint, Rect, UiaEnumerateBasis};
 
     fn hint_at(label: &str, element_id: u64, x: i32, y: i32, w: i32, h: i32) -> Hint {
         hint_scored(label, element_id, 0.0, x, y, w, h)
@@ -961,6 +949,7 @@ mod tests {
                 uia_runtime_id_fp: None,
                 uia_invoke_hwnd: None,
                 uia_child_index: None,
+                uia_enumerate_basis: UiaEnumerateBasis::default(),
                 bounds: Rect { x, y, w, h },
                 anchor_px: None,
                 kind: ElementKind::Invoke,

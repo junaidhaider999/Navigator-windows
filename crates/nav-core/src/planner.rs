@@ -16,12 +16,13 @@ const W_SIZE: f32 = 0.2;
 /// # Example
 ///
 /// ```
-/// use nav_core::{plan, RawHint, Rect, ElementKind, Backend};
+/// use nav_core::{plan, RawHint, Rect, ElementKind, Backend, UiaEnumerateBasis};
 /// let raw = RawHint {
 ///     element_id: 1,
 ///     uia_runtime_id_fp: None,
 ///     uia_invoke_hwnd: None,
 ///     uia_child_index: None,
+///     uia_enumerate_basis: UiaEnumerateBasis::default(),
 ///     bounds: Rect { x: 0, y: 0, w: 50, h: 20 },
 ///     anchor_px: None,
 ///     kind: ElementKind::Invoke,
@@ -33,7 +34,12 @@ const W_SIZE: f32 = 0.2;
 /// assert_eq!(hints.len(), 2);
 /// ```
 #[must_use]
-pub fn plan(raws: Vec<RawHint>, alphabet: &[char], layout_origin: Rect, max_planned: usize) -> Vec<Hint> {
+pub fn plan(
+    raws: Vec<RawHint>,
+    alphabet: &[char],
+    layout_origin: Rect,
+    max_planned: usize,
+) -> Vec<Hint> {
     let n_all = raws.len();
     if n_all == 0 {
         return Vec::new();
@@ -119,5 +125,26 @@ fn priority_score(raw: &RawHint, focus_rect: Rect) -> f32 {
     let rel_y = (cy - focus_rect.y) as f32 / focus_rect.h.max(1) as f32;
     let footer_penalty = if rel_y > 0.88 { -0.12 } else { 0.0 };
 
-    W_PROXIMITY * prox + kind + size_term + large_penalty + footer_penalty
+    let toolbar_boost = if rel_y < 0.15 { 0.14 } else { 0.0 };
+    let named_boost = if raw.name.is_some() { 0.1 } else { 0.0 };
+    let tiny_unlabeled_penalty = if raw.name.is_none() && raw.bounds.w * raw.bounds.h < 14 * 14 {
+        -0.12
+    } else {
+        0.0
+    };
+    let nav_boost = match raw.kind {
+        ElementKind::Select => 0.06,
+        ElementKind::Editable => 0.05,
+        _ => 0.0,
+    };
+
+    W_PROXIMITY * prox
+        + kind
+        + size_term
+        + large_penalty
+        + footer_penalty
+        + toolbar_boost
+        + named_boost
+        + tiny_unlabeled_penalty
+        + nav_boost
 }

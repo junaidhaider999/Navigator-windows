@@ -118,6 +118,44 @@ pub fn classify_interaction_kind(
         }
     }
     keyboard_focusable_interactive(el, from_cache)
+        .or_else(|| custom_control_candidate(el, from_cache))
+}
+
+fn custom_control_candidate(el: &IUIAutomationElement, from_cache: bool) -> Option<ElementKind> {
+    use windows::Win32::UI::Accessibility::UIA_CustomControlTypeId;
+    let ct = if from_cache {
+        unsafe { el.CachedControlType() }.ok()?
+    } else {
+        unsafe { el.CurrentControlType() }.ok()?
+    };
+    if ct != UIA_CustomControlTypeId {
+        return None;
+    }
+    let name_nonempty = if from_cache {
+        unsafe { el.CachedName() }
+            .ok()
+            .map(|b| !b.to_string().is_empty())
+            .unwrap_or(false)
+    } else {
+        unsafe { el.CurrentName() }
+            .ok()
+            .map(|b| !b.to_string().is_empty())
+            .unwrap_or(false)
+    };
+    let kb = if from_cache {
+        unsafe { el.CachedIsKeyboardFocusable() }
+            .ok()
+            .is_some_and(|b| b.as_bool())
+    } else {
+        unsafe { el.CurrentIsKeyboardFocusable() }
+            .ok()
+            .is_some_and(|b| b.as_bool())
+    };
+    if name_nonempty || kb {
+        Some(ElementKind::GenericClickable)
+    } else {
+        None
+    }
 }
 
 fn value_kind_from_control_type(

@@ -1,5 +1,5 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use nav_core::{Backend, ElementKind, Hint, RawHint, Rect, Session};
+use nav_core::{Backend, ElementKind, Hint, RawHint, Rect, Session, UiaEnumerateBasis};
 
 fn sample_session_hints(n: usize) -> Vec<Hint> {
     let raw = RawHint {
@@ -7,6 +7,7 @@ fn sample_session_hints(n: usize) -> Vec<Hint> {
         uia_runtime_id_fp: None,
         uia_invoke_hwnd: None,
         uia_child_index: None,
+        uia_enumerate_basis: UiaEnumerateBasis::default(),
         bounds: Rect {
             x: 0,
             y: 0,

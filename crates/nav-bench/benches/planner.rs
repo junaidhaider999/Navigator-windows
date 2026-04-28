@@ -1,5 +1,5 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use nav_core::{Backend, ElementKind, RawHint, Rect, plan};
+use nav_core::{Backend, ElementKind, RawHint, Rect, UiaEnumerateBasis, plan};
 
 fn sample_raws(n: usize) -> Vec<RawHint> {
     (0..n)
@@ -8,6 +8,7 @@ fn sample_raws(n: usize) -> Vec<RawHint> {
             uia_runtime_id_fp: None,
             uia_invoke_hwnd: None,
             uia_child_index: None,
+            uia_enumerate_basis: UiaEnumerateBasis::default(),
             bounds: Rect {
                 x: (i as i32 % 40) * 20,
                 y: (i as i32 / 40) * 16,
