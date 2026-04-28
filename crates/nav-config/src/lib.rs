@@ -65,7 +65,23 @@ fn default_enumeration_profile() -> String {
 }
 
 fn default_materialize_budget_ms() -> u64 {
-    60
+    30
+}
+
+fn default_hint_cache_ttl_ms() -> u64 {
+    500
+}
+
+fn default_pipeline_soft_budget_ms() -> u64 {
+    25
+}
+
+fn default_pipeline_hard_budget_ms() -> u64 {
+    30
+}
+
+fn default_enumeration_ladder() -> String {
+    "auto".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -82,6 +98,18 @@ pub struct HintsConfig {
     /// Stop Rust-side materialization after this many milliseconds (partial hint list).
     #[serde(default = "default_materialize_budget_ms")]
     pub materialize_budget_ms: u64,
+    /// Backend ordering: `auto` (class/exe probe), `uia_first`, `win32_first`, `chromium_fast`.
+    #[serde(default = "default_enumeration_ladder")]
+    pub enumeration_ladder: String,
+    /// Re-use last enumeration for the same HWND/PID within this window (instant repeat activation).
+    #[serde(default = "default_hint_cache_ttl_ms")]
+    pub hint_cache_ttl_ms: u64,
+    /// Log `[pipeline]` warning when hotkey→plan exceeds this many milliseconds.
+    #[serde(default = "default_pipeline_soft_budget_ms")]
+    pub pipeline_soft_budget_ms: u64,
+    /// Hard ceiling for `[pipeline]` diagnostics (enumeration may still return partial results earlier).
+    #[serde(default = "default_pipeline_hard_budget_ms")]
+    pub pipeline_hard_budget_ms: u64,
 }
 
 impl Default for HintsConfig {
@@ -91,6 +119,10 @@ impl Default for HintsConfig {
             max_elements: default_max_elements(),
             enumeration_profile: default_enumeration_profile(),
             materialize_budget_ms: default_materialize_budget_ms(),
+            enumeration_ladder: default_enumeration_ladder(),
+            hint_cache_ttl_ms: default_hint_cache_ttl_ms(),
+            pipeline_soft_budget_ms: default_pipeline_soft_budget_ms(),
+            pipeline_hard_budget_ms: default_pipeline_hard_budget_ms(),
         }
     }
 }
@@ -275,6 +307,16 @@ mod tests {
         assert_eq!(parsed.hints.max_elements, def.hints.max_elements);
         assert_eq!(parsed.hints.enumeration_profile, def.hints.enumeration_profile);
         assert_eq!(parsed.hints.materialize_budget_ms, def.hints.materialize_budget_ms);
+        assert_eq!(parsed.hints.enumeration_ladder, def.hints.enumeration_ladder);
+        assert_eq!(parsed.hints.hint_cache_ttl_ms, def.hints.hint_cache_ttl_ms);
+        assert_eq!(
+            parsed.hints.pipeline_soft_budget_ms,
+            def.hints.pipeline_soft_budget_ms
+        );
+        assert_eq!(
+            parsed.hints.pipeline_hard_budget_ms,
+            def.hints.pipeline_hard_budget_ms
+        );
         assert_eq!(parsed.hotkey.chord, def.hotkey.chord);
         assert_eq!(parsed.fallback.budget_ms.uia, def.fallback.budget_ms.uia);
         assert_eq!(parsed.render.debug_connectors, def.render.debug_connectors);
