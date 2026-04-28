@@ -12,9 +12,10 @@ use windows::Win32::UI::Accessibility::{
     IUIAutomationInvokePattern, IUIAutomationLegacyIAccessiblePattern,
     IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern, TreeScope_Children,
     TreeScope_Descendants, UIA_ExpandCollapsePatternId, UIA_InvokePatternId,
-    UIA_LegacyIAccessiblePatternId, UIA_SelectionItemPatternId, UIA_TogglePatternId,
+    UIA_LegacyIAccessiblePatternId, UIA_SelectionItemPatternId, UIA_TabItemControlTypeId,
+    UIA_TogglePatternId,
 };
-use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetForegroundWindow};
 use windows::core::Interface;
 
 use crate::UiaError;
@@ -60,7 +61,7 @@ pub fn invoke_invoke_pattern(
         hint,
     )?;
 
-    dispatch_with_fallbacks(automation, &el, hint)?;
+    dispatch_with_fallbacks(automation, &el, hint, hwnd)?;
     Ok(())
 }
 
@@ -133,12 +134,34 @@ fn resolve_enumerated_element(
     Ok(el)
 }
 
-/// Resolve → kind-first dispatch → pattern ladder → `ElementFromPoint` → `SendInput` → `SetFocus` (editable only).
+/// Resolve → physical click first for tab strips / Explorer shell where patterns only move focus →
+/// kind-first dispatch → pattern ladder → `ElementFromPoint` → `SendInput` → `SetFocus` (editable only).
 fn dispatch_with_fallbacks(
     automation: &IUIAutomation,
     el: &IUIAutomationElement,
     hint: &Hint,
+    session_hwnd: UiaHwnd,
 ) -> Result<&'static str, UiaError> {
+    // Tab items: Invoke / SelectionItem often only move keyboard focus; real click switches tabs.
+    if let Ok(ct) = unsafe { el.CurrentControlType() } {
+        if ct == UIA_TabItemControlTypeId && invoke_click_hint(&hint.raw).is_ok() {
+            eprintln!(
+                "[invoke] hint={} backend=UIA mode=SendInputClick TabItem-first",
+                hint.label
+            );
+            return Ok("SendInputClick");
+        }
+    }
+    if explorer_shell_selection_prefers_physical_click(session_hwnd, hint)
+        && invoke_click_hint(&hint.raw).is_ok()
+    {
+        eprintln!(
+            "[invoke] hint={} backend=UIA mode=SendInputClick ExplorerShell-Select-first",
+            hint.label
+        );
+        return Ok("SendInputClick");
+    }
+
     if let Ok(m) = dispatch_primary(el, hint) {
         return Ok(m);
     }
@@ -156,6 +179,20 @@ fn dispatch_with_fallbacks(
     invoke_click_hint(&hint.raw)?;
     eprintln!("[invoke] hint={} fallback=SendInputClick", hint.label);
     Ok("SendInputClick")
+}
+
+fn explorer_shell_selection_prefers_physical_click(session_hwnd: UiaHwnd, hint: &Hint) -> bool {
+    if hint.raw.kind != ElementKind::Select {
+        return false;
+    }
+    let mut buf = [0u16; 96];
+    let n = unsafe { GetClassNameW(session_hwnd, &mut buf) };
+    if n == 0 {
+        return false;
+    }
+    let name = String::from_utf16_lossy(&buf[..n as usize]);
+    let name = name.trim_end_matches('\0');
+    name.eq_ignore_ascii_case("CabinetWClass") || name.eq_ignore_ascii_case("ExploreWClass")
 }
 
 fn element_at_invoke_point(
