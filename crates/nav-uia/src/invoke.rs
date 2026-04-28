@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 use windows::core::Interface;
 
 use crate::UiaError;
-use crate::click::left_click_rect_center;
+use crate::click::{invoke_click_hint, resolve_invoke_physical_point};
 use crate::hwnd::UiaHwnd;
 
 /// Resolves the enumerated element and performs the interaction implied by [`Hint::raw.kind`](nav_core::RawHint).
@@ -60,11 +60,7 @@ pub fn invoke_invoke_pattern(
         hint,
     )?;
 
-    let method = dispatch_with_fallbacks(automation, &el, hint)?;
-    eprintln!(
-        "[invoke] label={} backend=UIA method={} success=true",
-        hint.label, method
-    );
+    dispatch_with_fallbacks(automation, &el, hint)?;
     Ok(())
 }
 
@@ -122,7 +118,7 @@ fn resolve_enumerated_element(
     Ok(el)
 }
 
-/// Primary dispatch from enumeration classification, then universal pattern chain, `ElementFromPoint`, `SendInput`.
+/// Resolve → kind-first dispatch → pattern ladder → `ElementFromPoint` → `SendInput` → `SetFocus` (editable only).
 fn dispatch_with_fallbacks(
     automation: &IUIAutomation,
     el: &IUIAutomationElement,
@@ -131,28 +127,30 @@ fn dispatch_with_fallbacks(
     if let Ok(m) = dispatch_primary(el, hint) {
         return Ok(m);
     }
-    if try_universal_action_chain(el).is_ok() {
-        return Ok("pattern_fallback");
+    if let Ok(m) = try_invoke_priority_ladder(el, hint) {
+        return Ok(m);
     }
-    if let Ok(ref el2) = element_at_hint_center(automation, hint) {
+    if let Ok(ref el2) = element_at_invoke_point(automation, hint) {
         if let Ok(m) = dispatch_primary(el2, hint) {
             return Ok(m);
         }
-        if try_universal_action_chain(el2).is_ok() {
-            return Ok("element_from_point+fallback");
+        if let Ok(m) = try_invoke_priority_ladder(el2, hint) {
+            return Ok(m);
         }
     }
-    left_click_rect_center(&hint.raw.bounds)?;
-    Ok("SendInput")
+    invoke_click_hint(&hint.raw)?;
+    eprintln!(
+        "[invoke] hint={} fallback=SendInputClick",
+        hint.label
+    );
+    Ok("SendInputClick")
 }
 
-fn element_at_hint_center(
+fn element_at_invoke_point(
     automation: &IUIAutomation,
     hint: &Hint,
 ) -> Result<IUIAutomationElement, UiaError> {
-    let r = hint.raw.bounds;
-    let cx = r.x + r.w / 2;
-    let cy = r.y + r.h / 2;
+    let (cx, cy) = resolve_invoke_physical_point(&hint.raw);
     unsafe { automation.ElementFromPoint(POINT { x: cx, y: cy }) }
         .map_err(|e| UiaError::Operation(format!("ElementFromPoint({cx},{cy}): {e}")))
 }
@@ -178,20 +176,61 @@ fn pattern_cached_or_current(
     }
 }
 
-fn try_universal_action_chain(el: &IUIAutomationElement) -> Result<(), UiaError> {
+/// Ladder when [`dispatch_primary`] failed: Invoke → Legacy → semantic Toggle/Select/ExpandCollapse → never `SetFocus` here.
+fn try_invoke_priority_ladder(
+    el: &IUIAutomationElement,
+    hint: &Hint,
+) -> Result<&'static str, UiaError> {
     if try_invoke_only(el).is_ok() {
-        return Ok(());
-    }
-    if try_select_only(el).is_ok() {
-        return Ok(());
-    }
-    if try_toggle_only(el).is_ok() {
-        return Ok(());
+        eprintln!(
+            "[invoke] hint={} backend=UIA mode=InvokePattern",
+            hint.label
+        );
+        return Ok("InvokePattern");
     }
     if try_legacy_default_only(el).is_ok() {
-        return Ok(());
+        eprintln!(
+            "[invoke] hint={} backend=UIA mode=LegacyIAccessible",
+            hint.label
+        );
+        return Ok("LegacyIAccessible");
     }
-    unsafe { el.SetFocus() }.map_err(|e| UiaError::Operation(format!("SetFocus: {e}")))
+    if hint.raw.kind == ElementKind::Toggle && try_toggle_only(el).is_ok() {
+        eprintln!("[invoke] hint={} backend=UIA mode=Toggle", hint.label);
+        return Ok("Toggle");
+    }
+    if hint.raw.kind == ElementKind::Select && try_select_only(el).is_ok() {
+        eprintln!(
+            "[invoke] hint={} backend=UIA mode=SelectionItem",
+            hint.label
+        );
+        return Ok("SelectionItem");
+    }
+    if hint.raw.kind == ElementKind::ExpandCollapse && try_expand_collapse_semantic(el).is_ok() {
+        eprintln!(
+            "[invoke] hint={} backend=UIA mode=ExpandCollapse",
+            hint.label
+        );
+        return Ok("ExpandCollapse");
+    }
+    Err(UiaError::Operation("invoke ladder exhausted".into()))
+}
+
+fn try_expand_collapse_semantic(el: &IUIAutomationElement) -> Result<(), UiaError> {
+    let pat = pattern_cached_or_current(el, UIA_ExpandCollapsePatternId)?;
+    let p: IUIAutomationExpandCollapsePattern =
+        pat.cast().map_err(|e| UiaError::Operation(e.to_string()))?;
+    let state = unsafe { p.CachedExpandCollapseState() }
+        .or_else(|_| unsafe { p.CurrentExpandCollapseState() })
+        .map_err(|e| UiaError::Operation(e.to_string()))?;
+    if state == ExpandCollapseState_LeafNode {
+        return Err(UiaError::Operation("expand leaf".into()));
+    }
+    if state == ExpandCollapseState_Collapsed || state == ExpandCollapseState_PartiallyExpanded {
+        unsafe { p.Expand() }.map_err(|e| UiaError::Operation(e.to_string()))
+    } else {
+        unsafe { p.Collapse() }.map_err(|e| UiaError::Operation(e.to_string()))
+    }
 }
 
 fn try_invoke_only(el: &IUIAutomationElement) -> Result<(), UiaError> {
@@ -230,13 +269,18 @@ fn dispatch_primary(el: &IUIAutomationElement, hint: &Hint) -> Result<&'static s
             let invoke: IUIAutomationInvokePattern =
                 pat.cast().map_err(|e| UiaError::Operation(e.to_string()))?;
             unsafe { invoke.Invoke() }.map_err(|e| UiaError::Operation(e.to_string()))?;
-            Ok("Invoke")
+            eprintln!(
+                "[invoke] hint={} backend=UIA mode=InvokePattern",
+                hint.label
+            );
+            Ok("InvokePattern")
         }
         ElementKind::Toggle => {
             let pat = pattern_cached_or_current(el, UIA_TogglePatternId)?;
             let p: IUIAutomationTogglePattern =
                 pat.cast().map_err(|e| UiaError::Operation(e.to_string()))?;
             unsafe { p.Toggle() }.map_err(|e| UiaError::Operation(e.to_string()))?;
+            eprintln!("[invoke] hint={} backend=UIA mode=Toggle", hint.label);
             Ok("Toggle")
         }
         ElementKind::Select => {
@@ -244,6 +288,10 @@ fn dispatch_primary(el: &IUIAutomationElement, hint: &Hint) -> Result<&'static s
             let p: IUIAutomationSelectionItemPattern =
                 pat.cast().map_err(|e| UiaError::Operation(e.to_string()))?;
             unsafe { p.Select() }.map_err(|e| UiaError::Operation(e.to_string()))?;
+            eprintln!(
+                "[invoke] hint={} backend=UIA mode=SelectionItem",
+                hint.label
+            );
             Ok("SelectionItem")
         }
         ElementKind::ExpandCollapse => {
@@ -254,39 +302,93 @@ fn dispatch_primary(el: &IUIAutomationElement, hint: &Hint) -> Result<&'static s
                 .or_else(|_| unsafe { p.CurrentExpandCollapseState() })
                 .map_err(|e| UiaError::Operation(e.to_string()))?;
             if state == ExpandCollapseState_LeafNode {
-                left_click_rect_center(&hint.raw.bounds)?;
-                Ok("SendInput")
+                invoke_click_hint(&hint.raw)?;
+                eprintln!(
+                    "[invoke] hint={} fallback=SendInputClick",
+                    hint.label
+                );
+                Ok("SendInputClick")
             } else if state == ExpandCollapseState_Collapsed
                 || state == ExpandCollapseState_PartiallyExpanded
             {
                 unsafe { p.Expand() }.map_err(|e| UiaError::Operation(e.to_string()))?;
-                Ok("Expand")
+                eprintln!(
+                    "[invoke] hint={} backend=UIA mode=ExpandCollapse",
+                    hint.label
+                );
+                Ok("ExpandCollapse")
             } else {
                 unsafe { p.Collapse() }.map_err(|e| UiaError::Operation(e.to_string()))?;
-                Ok("Collapse")
+                eprintln!(
+                    "[invoke] hint={} backend=UIA mode=ExpandCollapse",
+                    hint.label
+                );
+                Ok("ExpandCollapse")
             }
         }
         ElementKind::GenericClickable => {
+            if let Ok(pat) = pattern_cached_or_current(el, UIA_InvokePatternId) {
+                if let Ok(invoke) = pat.cast::<IUIAutomationInvokePattern>() {
+                    if unsafe { invoke.Invoke() }.is_ok() {
+                        eprintln!(
+                            "[invoke] hint={} backend=UIA mode=InvokePattern",
+                            hint.label
+                        );
+                        return Ok("InvokePattern");
+                    }
+                }
+            }
             if let Ok(pat) = pattern_cached_or_current(el, UIA_LegacyIAccessiblePatternId) {
                 if let Ok(leg) = pat.cast::<IUIAutomationLegacyIAccessiblePattern>() {
                     if unsafe { leg.DoDefaultAction() }.is_ok() {
+                        eprintln!(
+                            "[invoke] hint={} backend=UIA mode=LegacyIAccessible",
+                            hint.label
+                        );
                         return Ok("LegacyIAccessible");
                     }
                 }
             }
-            left_click_rect_center(&hint.raw.bounds)?;
-            Ok("SendInput")
+            invoke_click_hint(&hint.raw)?;
+            eprintln!(
+                "[invoke] hint={} fallback=SendInputClick",
+                hint.label
+            );
+            Ok("SendInputClick")
         }
         ElementKind::Editable => {
             if let Ok(pat) = pattern_cached_or_current(el, UIA_LegacyIAccessiblePatternId) {
                 if let Ok(leg) = pat.cast::<IUIAutomationLegacyIAccessiblePattern>() {
                     if unsafe { leg.DoDefaultAction() }.is_ok() {
+                        eprintln!(
+                            "[invoke] hint={} backend=UIA mode=LegacyIAccessible",
+                            hint.label
+                        );
                         return Ok("LegacyIAccessible");
                     }
                 }
             }
-            left_click_rect_center(&hint.raw.bounds)?;
-            Ok("SendInput")
+            match invoke_click_hint(&hint.raw) {
+                Ok(()) => {
+                    eprintln!(
+                        "[invoke] hint={} fallback=SendInputClick",
+                        hint.label
+                    );
+                    Ok("SendInputClick")
+                }
+                Err(e_click) => {
+                    unsafe { el.SetFocus() }.map_err(|e| {
+                        UiaError::Operation(format!(
+                            "SetFocus after SendInput failed ({e_click}); SetFocus: {e}"
+                        ))
+                    })?;
+                    eprintln!(
+                        "[invoke] hint={} backend=UIA mode=SetFocus",
+                        hint.label
+                    );
+                    Ok("SetFocus")
+                }
+            }
         }
     }
 }
