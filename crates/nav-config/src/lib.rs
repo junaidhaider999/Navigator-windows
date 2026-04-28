@@ -28,8 +28,28 @@ pub struct Config {
     pub hotkey: HotkeyConfig,
     #[serde(default)]
     pub log: LogConfig,
+    /// Overlay rendering (hint pills, diagnostics).
+    #[serde(default)]
+    pub render: RenderConfig,
     #[serde(default)]
     pub fallback: FallbackConfig,
+}
+
+/// Overlay pill rendering options (`config.toml` `[render]`).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct RenderConfig {
+    /// Draw pill→target connector lines. Off by default (noisy); enable for debugging layout.
+    #[serde(default)]
+    pub debug_connectors: bool,
+    /// Red dot at the resolved invoke anchor (physical point mapped to overlay DIPs).
+    #[serde(default)]
+    pub debug_target_dot: bool,
+    /// Green outline around element bounding rects (UIA bounds).
+    #[serde(default)]
+    pub debug_target_rect: bool,
+    /// Numeric distance from pill center to invoke anchor (DIPs).
+    #[serde(default)]
+    pub debug_distance: bool,
 }
 
 fn default_alphabet() -> String {
@@ -40,6 +60,14 @@ fn default_max_elements() -> usize {
     2048
 }
 
+fn default_enumeration_profile() -> String {
+    "fast".to_string()
+}
+
+fn default_materialize_budget_ms() -> u64 {
+    60
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HintsConfig {
     /// Characters used for vimium-style labels, in priority order (whitespace ignored when ingested by the app).
@@ -48,6 +76,12 @@ pub struct HintsConfig {
     /// Hard cap on enumerated / labeled elements per session.
     #[serde(default = "default_max_elements")]
     pub max_elements: usize,
+    /// `fast` = patterns-only UIA match (low latency). `full` = broader keyboard-focusable matching.
+    #[serde(default = "default_enumeration_profile")]
+    pub enumeration_profile: String,
+    /// Stop Rust-side materialization after this many milliseconds (partial hint list).
+    #[serde(default = "default_materialize_budget_ms")]
+    pub materialize_budget_ms: u64,
 }
 
 impl Default for HintsConfig {
@@ -55,6 +89,8 @@ impl Default for HintsConfig {
         Self {
             alphabet: default_alphabet(),
             max_elements: default_max_elements(),
+            enumeration_profile: default_enumeration_profile(),
+            materialize_budget_ms: default_materialize_budget_ms(),
         }
     }
 }
@@ -237,7 +273,13 @@ mod tests {
         let def = Config::default();
         assert_eq!(parsed.hints.alphabet, def.hints.alphabet);
         assert_eq!(parsed.hints.max_elements, def.hints.max_elements);
+        assert_eq!(parsed.hints.enumeration_profile, def.hints.enumeration_profile);
+        assert_eq!(parsed.hints.materialize_budget_ms, def.hints.materialize_budget_ms);
         assert_eq!(parsed.hotkey.chord, def.hotkey.chord);
         assert_eq!(parsed.fallback.budget_ms.uia, def.fallback.budget_ms.uia);
+        assert_eq!(parsed.render.debug_connectors, def.render.debug_connectors);
+        assert_eq!(parsed.render.debug_target_dot, def.render.debug_target_dot);
+        assert_eq!(parsed.render.debug_target_rect, def.render.debug_target_rect);
+        assert_eq!(parsed.render.debug_distance, def.render.debug_distance);
     }
 }
