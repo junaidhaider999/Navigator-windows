@@ -5,7 +5,7 @@
 
 ## Status
 
-**Phase C (MVP path) is implemented:** `Alt+;` → UIA enumerate → `nav-core` plan
+**Phase C (MVP path) is implemented:** `Alt+/` → UIA enumerate → `nav-core` plan
 → session → overlay pills → type labels → UIA invoke; Esc and second hotkey
 cancel cleanly. **Phase D (in tree):** D1 cached enumeration (`FindAllBuildCache`,
 with `FindAll` + `GetCurrentPattern` fallback when a provider rejects the cache),
@@ -40,7 +40,7 @@ Pure logic lives in `crates/nav-core` (cross-platform); Criterion benches in `cr
 
 The legacy Hunt-and-Peck (HAP) C# sources exist only under [`legacy/`](legacy/).
 
-Then focus a window (e.g. Notepad) and press **`Alt+;`** to start a hint session.
+Then focus a window (e.g. Notepad) and press **`Alt+/`** to start a hint session.
 
 ## Documentation
 

@@ -1,4 +1,4 @@
-//! Primary global hotkey: **Alt+** `;` (`VK_OEM_1`) with `MOD_ALT | MOD_NOREPEAT`.
+//! Primary global hotkey: **Alt+/** (`VK_OEM_2`) with `MOD_ALT | MOD_NOREPEAT`.
 //!
 //! Registration uses `RegisterHotKey` on the message-only window (see `thread.rs` on Windows).
 

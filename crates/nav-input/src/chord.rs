@@ -20,7 +20,7 @@ pub fn parse_chord(raw: &str) -> Result<(HOT_KEY_MODIFIERS, u32), String> {
         .collect();
     if parts.len() < 2 {
         return Err(
-            "hotkey must list one or more modifiers and a key (example: alt+; or ctrl+shift+a)"
+            "hotkey must list one or more modifiers and a key (example: alt+/ or ctrl+shift+a)"
                 .into(),
         );
     }
@@ -128,9 +128,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_alt_semicolon() {
-        let (m, vk) = parse_chord("alt+;").expect("parse");
-        assert_eq!(vk, VK_OEM_1.0 as u32);
+    fn default_alt_slash() {
+        let (m, vk) = parse_chord("alt+/").expect("parse");
+        assert_eq!(vk, VK_OEM_2.0 as u32);
         assert_ne!(m.0 & MOD_ALT.0, 0);
         assert_ne!(m.0 & MOD_NOREPEAT.0, 0);
     }

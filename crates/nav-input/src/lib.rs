@@ -25,7 +25,7 @@ mod stub;
 #[cfg(not(windows))]
 pub use stub::InputThread;
 
-/// Snapshot emitted when the primary hotkey fires (registered chord, e.g. `Alt+;`, or plain `/` when safe).
+/// Snapshot emitted when the primary hotkey fires (registered chord, e.g. `Alt+/`, or plain `/` when safe).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HotkeyPress {
     /// `RegisterHotKey` id (`wParam` of `WM_HOTKEY`); same as primary id for plain-`/` activations.
@@ -81,7 +81,7 @@ mod tests {
     #[test]
     fn spawn_errors_on_non_windows() {
         assert!(matches!(
-            crate::InputThread::spawn_with_chord("alt+;"),
+            crate::InputThread::spawn_with_chord("alt+/"),
             Err(crate::InputError::UnsupportedPlatform)
         ));
     }
