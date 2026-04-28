@@ -20,11 +20,12 @@ use windows::Win32::UI::Accessibility::{
     UIA_IsValuePatternAvailablePropertyId, UIA_LegacyIAccessiblePatternId,
     UIA_ListItemControlTypeId, UIA_MenuItemControlTypeId, UIA_NamePropertyId, UIA_PROPERTY_ID,
     UIA_RadioButtonControlTypeId, UIA_SelectionItemPatternId, UIA_SplitButtonControlTypeId,
-    UIA_TabItemControlTypeId, UIA_TogglePatternId, UIA_TreeItemControlTypeId, UIA_ValuePatternId,
+    UIA_TabItemControlTypeId, UIA_TextControlTypeId, UIA_TogglePatternId, UIA_TreeItemControlTypeId,
+    UIA_ValuePatternId,
 };
 
 use crate::UiaError;
-use crate::options::EnumOptions;
+use crate::options::{EnumOptions, EnumerationProfile};
 
 fn variant_bool(vt_bool: windows::Win32::Foundation::VARIANT_BOOL) -> VARIANT {
     VARIANT {
@@ -97,9 +98,64 @@ fn or_control_types(
     Ok(acc)
 }
 
-/// `FindAll` / `FindAllBuildCache` for **descendants**: broad interaction OR (patterns + focusable
-/// common control types), then optional enabled / on-screen AND clauses from `opts`.
+/// `FindAll` / `FindAllBuildCache` for **descendants**: profile selects breadth vs latency.
 pub fn create_invoke_targets_find_condition(
+    automation: &IUIAutomation,
+    opts: &EnumOptions,
+) -> Result<IUIAutomationCondition, UiaError> {
+    match opts.profile {
+        EnumerationProfile::Fast => create_invoke_targets_fast(automation, opts),
+        EnumerationProfile::Full => create_invoke_targets_full(automation, opts),
+    }
+}
+
+/// Patterns-only match (no keyboard-focusable × control-type expansion). Fewer nodes → faster `FindAll`.
+fn create_invoke_targets_fast(
+    automation: &IUIAutomation,
+    opts: &EnumOptions,
+) -> Result<IUIAutomationCondition, UiaError> {
+    unsafe {
+        let v_true = variant_bool(VARIANT_TRUE);
+        let v_false = variant_bool(VARIANT_FALSE);
+
+        let pattern_props = [
+            UIA_IsInvokePatternAvailablePropertyId,
+            UIA_IsTogglePatternAvailablePropertyId,
+            UIA_IsSelectionItemPatternAvailablePropertyId,
+            UIA_IsExpandCollapsePatternAvailablePropertyId,
+            UIA_IsLegacyIAccessiblePatternAvailablePropertyId,
+            UIA_IsValuePatternAvailablePropertyId,
+        ];
+        let mut acc = or_property_flags(automation, &pattern_props, &v_true)?;
+
+        if !opts.include_disabled {
+            let c = automation
+                .CreatePropertyCondition(UIA_IsEnabledPropertyId, &v_true)
+                .map_err(|e| {
+                    UiaError::Operation(format!("CreatePropertyCondition IsEnabled: {e}"))
+                })?;
+            acc = automation
+                .CreateAndCondition(&acc, &c)
+                .map_err(|e| UiaError::Operation(format!("CreateAndCondition (enabled): {e}")))?;
+        }
+
+        if !opts.include_offscreen {
+            let c = automation
+                .CreatePropertyCondition(UIA_IsOffscreenPropertyId, &v_false)
+                .map_err(|e| {
+                    UiaError::Operation(format!("CreatePropertyCondition IsOffscreen: {e}"))
+                })?;
+            acc = automation
+                .CreateAndCondition(&acc, &c)
+                .map_err(|e| UiaError::Operation(format!("CreateAndCondition (offscreen): {e}")))?;
+        }
+
+        exclude_pure_text(automation, &acc)
+    }
+}
+
+/// Broad match: explicit patterns **or** keyboard-focusable common control types (legacy behavior).
+fn create_invoke_targets_full(
     automation: &IUIAutomation,
     opts: &EnumOptions,
 ) -> Result<IUIAutomationCondition, UiaError> {
@@ -166,7 +222,25 @@ pub fn create_invoke_targets_find_condition(
                 .map_err(|e| UiaError::Operation(format!("CreateAndCondition (offscreen): {e}")))?;
         }
 
-        Ok(acc)
+        exclude_pure_text(automation, &acc)
+    }
+}
+
+fn exclude_pure_text(
+    automation: &IUIAutomation,
+    acc: &IUIAutomationCondition,
+) -> Result<IUIAutomationCondition, UiaError> {
+    unsafe {
+        let v_text = variant_i4(UIA_TextControlTypeId.0);
+        let is_text = automation
+            .CreatePropertyCondition(UIA_ControlTypePropertyId, &v_text)
+            .map_err(|e| UiaError::Operation(format!("CreatePropertyCondition Text CT: {e}")))?;
+        let not_text = automation
+            .CreateNotCondition(&is_text)
+            .map_err(|e| UiaError::Operation(format!("CreateNotCondition text: {e}")))?;
+        automation
+            .CreateAndCondition(acc, &not_text)
+            .map_err(|e| UiaError::Operation(format!("CreateAndCondition not-text: {e}")))
     }
 }
 

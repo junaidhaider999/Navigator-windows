@@ -2,7 +2,7 @@
 
 use std::mem::ManuallyDrop;
 
-use nav_core::{Backend, ElementKind, RawHint, Rect};
+use nav_core::{Backend, ElementKind, RawHint, Rect, fallback_anchor_px};
 use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_I4};
 use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
@@ -136,12 +136,14 @@ unsafe fn walk_collect(
     if let Some(loc) = unsafe { acc_location(acc) } {
         if should_take_node(role, state, opts, loc.w, loc.h) {
             let kind = role_to_kind(role).unwrap_or(ElementKind::GenericClickable);
+            let anchor = fallback_anchor_px(loc, kind);
             out.push(RawHint {
                 element_id: out.len() as u64,
                 uia_runtime_id_fp: None,
                 uia_invoke_hwnd: None,
                 uia_child_index: None,
                 bounds: loc,
+                anchor_px: Some(anchor),
                 kind,
                 name: None,
                 backend: Backend::Msaa,

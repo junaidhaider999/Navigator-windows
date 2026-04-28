@@ -3,8 +3,12 @@
 use core::ffi::c_void;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use nav_core::{Backend, NavEnumerateResult, RawHint, Rect, UiaDebugReject, fnv1a_hash_i32_slice};
+use nav_core::{
+    Backend, NavEnumerateResult, RawHint, Rect, UiaDebugReject, UiaEnumerateTimingsMs,
+    fnv1a_hash_i32_slice,
+};
 use rayon::prelude::*;
 use windows::Win32::Foundation::{HWND, RECT, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::SAFEARRAY;
@@ -27,7 +31,7 @@ use crate::UiaError;
 use crate::cache::{create_enumeration_cache_request, create_invoke_targets_find_condition};
 use crate::coords::rect_from_uia_bounds;
 use crate::hwnd::UiaHwnd;
-use crate::options::EnumOptions;
+use crate::options::{EnumOptions, EnumerationProfile};
 use crate::pattern::classify_interaction_kind;
 
 /// Descendant count at or above which we consider splitting root children across a pool (D3).
@@ -77,6 +81,17 @@ pub fn enumerate_baseline(
         .debug_overlay
         .then(|| Arc::new(Mutex::new(Vec::<UiaDebugReject>::new())));
 
+    let finish = |hints: Vec<RawHint>, find_ms: f64, mat_ms: f64| -> NavEnumerateResult {
+        NavEnumerateResult {
+            hints,
+            debug_rejects: take_rejects(&reject_sink),
+            timings_ms: Some(UiaEnumerateTimingsMs {
+                findall_ms: find_ms,
+                materialize_ms: mat_ms,
+            }),
+        }
+    };
+
     if hwnd.is_invalid() {
         return Ok(NavEnumerateResult::default());
     }
@@ -87,38 +102,37 @@ pub fn enumerate_baseline(
     let true_cond = unsafe { automation.CreateTrueCondition() }
         .map_err(|e| UiaError::Operation(e.to_string()))?;
 
+    let t_find = Instant::now();
     let (all, root_cached) =
         descendants_cached_or_uncached(&root, TreeScope_Descendants, find_descendants_cond, cache)?;
+    let find_ms = t_find.elapsed().as_secs_f64() * 1000.0;
 
     let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
 
     if !root_cached {
+        let t_mat = Instant::now();
         let hints =
             collect_from_descendants_array(&all, opts, hwnd, None, None, false, &reject_sink)?;
-        return Ok(NavEnumerateResult {
-            hints,
-            debug_rejects: take_rejects(&reject_sink),
-        });
+        let mat_ms = t_mat.elapsed().as_secs_f64() * 1000.0;
+        return Ok(finish(hints, find_ms, mat_ms));
     }
 
     if len < PARALLEL_DESCENDANT_MIN {
+        let t_mat = Instant::now();
         let hints =
             collect_from_descendants_array(&all, opts, hwnd, None, None, true, &reject_sink)?;
-        return Ok(NavEnumerateResult {
-            hints,
-            debug_rejects: take_rejects(&reject_sink),
-        });
+        let mat_ms = t_mat.elapsed().as_secs_f64() * 1000.0;
+        return Ok(finish(hints, find_ms, mat_ms));
     }
 
     let kids = match unsafe { root.FindAllBuildCache(TreeScope_Children, &true_cond, cache) } {
         Ok(k) => k,
         Err(e) if is_pattern_cache_build_failure(&e) => {
+            let t_mat = Instant::now();
             let hints =
                 collect_from_descendants_array(&all, opts, hwnd, None, None, true, &reject_sink)?;
-            return Ok(NavEnumerateResult {
-                hints,
-                debug_rejects: take_rejects(&reject_sink),
-            });
+            let mat_ms = t_mat.elapsed().as_secs_f64() * 1000.0;
+            return Ok(finish(hints, find_ms, mat_ms));
         }
         Err(e) => {
             return Err(UiaError::Operation(format!(
@@ -129,12 +143,11 @@ pub fn enumerate_baseline(
     let n_children = unsafe { kids.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
 
     if n_children <= 1 {
+        let t_mat = Instant::now();
         let hints =
             collect_from_descendants_array(&all, opts, hwnd, None, None, true, &reject_sink)?;
-        return Ok(NavEnumerateResult {
-            hints,
-            debug_rejects: take_rejects(&reject_sink),
-        });
+        let mat_ms = t_mat.elapsed().as_secs_f64() * 1000.0;
+        return Ok(finish(hints, find_ms, mat_ms));
     }
 
     let mut hwnd_subtrees: Vec<HWND> = Vec::new();
@@ -158,18 +171,16 @@ pub fn enumerate_baseline(
     hwnd_subtrees.retain(|h| *h != hwnd);
 
     if hwnd_subtrees.len() < MIN_PARALLEL_HWND_SUBTREES {
+        let t_mat = Instant::now();
         let hints =
             collect_from_descendants_array(&all, opts, hwnd, None, None, true, &reject_sink)?;
-        return Ok(NavEnumerateResult {
-            hints,
-            debug_rejects: take_rejects(&reject_sink),
-        });
+        let mat_ms = t_mat.elapsed().as_secs_f64() * 1000.0;
+        return Ok(finish(hints, find_ms, mat_ms));
     }
 
     let opts_arc = Arc::new(opts.clone());
     let reject_arc = reject_sink.clone();
     let session_root_bits = hwnd.0 as usize;
-    // `HWND` is not `Send` in windows-rs; pass pointer bits for Rayon.
     let hwnd_bits: Vec<usize> = hwnd_subtrees.iter().map(|h| h.0 as usize).collect();
     let parallel: Result<Vec<Vec<RawHint>>, UiaError> = hwnd_bits
         .par_iter()
@@ -183,15 +194,15 @@ pub fn enumerate_baseline(
     let mut merged: Vec<RawHint> = match parallel {
         Ok(parts) => parts.into_iter().flatten().collect(),
         Err(_) => {
+            let t_mat = Instant::now();
             let hints =
                 collect_from_descendants_array(&all, opts, hwnd, None, None, true, &reject_sink)?;
-            return Ok(NavEnumerateResult {
-                hints,
-                debug_rejects: take_rejects(&reject_sink),
-            });
+            let mat_ms = t_mat.elapsed().as_secs_f64() * 1000.0;
+            return Ok(finish(hints, find_ms, mat_ms));
         }
     };
 
+    let t_mat_tail = Instant::now();
     for &j in &no_hwnd_indices {
         let el = unsafe { kids.GetElement(j) }.map_err(|e| UiaError::Operation(e.to_string()))?;
         let (sub, sub_cached) = descendants_cached_or_uncached(
@@ -210,6 +221,7 @@ pub fn enumerate_baseline(
             &reject_sink,
         )?);
     }
+    let mat_tail_ms = t_mat_tail.elapsed().as_secs_f64() * 1000.0;
 
     merged.sort_by(|a, b| {
         a.bounds
@@ -219,10 +231,7 @@ pub fn enumerate_baseline(
             .then_with(|| a.element_id.cmp(&b.element_id))
     });
     merged.truncate(opts.max_elements);
-    Ok(NavEnumerateResult {
-        hints: merged,
-        debug_rejects: take_rejects(&reject_sink),
-    })
+    Ok(finish(merged, find_ms, mat_tail_ms))
 }
 
 fn take_rejects(sink: &Option<Arc<Mutex<Vec<UiaDebugReject>>>>) -> Vec<UiaDebugReject> {
@@ -312,8 +321,13 @@ fn collect_from_descendants_array(
 ) -> Result<Vec<RawHint>, UiaError> {
     let len = unsafe { all.Length() }.map_err(|e| UiaError::Operation(e.to_string()))?;
     let mut out = Vec::new();
+    let budget = opts.materialize_hard_budget_ms;
+    let mat_start = Instant::now();
 
     for i in 0..len {
+        if budget > 0 && mat_start.elapsed() >= Duration::from_millis(budget) {
+            break;
+        }
         if out.len() >= opts.max_elements {
             break;
         }
@@ -439,7 +453,11 @@ fn collect_from_descendants_array(
 
         let name = read_optional_name(&el, patterns_from_cache);
 
-        let uia_runtime_id_fp = unsafe { uia_runtime_id_fingerprint(&el) };
+        let uia_runtime_id_fp = if opts.profile == EnumerationProfile::Full {
+            unsafe { uia_runtime_id_fingerprint(&el) }
+        } else {
+            None
+        };
 
         out.push(RawHint {
             element_id: i as u64,
@@ -451,6 +469,7 @@ fn collect_from_descendants_array(
                 None
             },
             bounds: rect,
+            anchor_px: None,
             kind,
             name,
             backend: Backend::Uia,

@@ -1,6 +1,6 @@
 //! Last-resort `EnumChildWindows` enumeration (Phase E2).
 
-use nav_core::{Backend, ElementKind, RawHint, Rect};
+use nav_core::{Backend, ElementKind, RawHint, Rect, fallback_anchor_px};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetWindowRect, IsWindowVisible};
@@ -38,17 +38,20 @@ unsafe extern "system" fn enum_child_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     }
 
     let id = ctx.out.len() as u64;
+    let b = Rect {
+            x: wr.left,
+            y: wr.top,
+            w,
+            h,
+        };
+    let anchor = fallback_anchor_px(b, ElementKind::GenericClickable);
     ctx.out.push(RawHint {
         element_id: id,
         uia_runtime_id_fp: None,
         uia_invoke_hwnd: Some(hwnd.0 as usize),
         uia_child_index: None,
-        bounds: Rect {
-            x: wr.left,
-            y: wr.top,
-            w,
-            h,
-        },
+        bounds: b,
+        anchor_px: Some(anchor),
         kind: ElementKind::GenericClickable,
         name: None,
         backend: Backend::RawHwnd,

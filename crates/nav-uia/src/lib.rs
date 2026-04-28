@@ -10,8 +10,8 @@ pub mod options;
 pub use error::UiaError;
 pub use hwnd::UiaHwnd;
 pub use options::{
-    EnumOptions, FallbackPolicy, M9_DEFAULT_BUDGET_HWND_MS, M9_DEFAULT_BUDGET_MSAA_MS,
-    M9_DEFAULT_BUDGET_UIA_MS,
+    EnumOptions, EnumerationProfile, FallbackPolicy, M9_DEFAULT_BUDGET_HWND_MS,
+    M9_DEFAULT_BUDGET_MSAA_MS, M9_DEFAULT_BUDGET_UIA_MS,
 };
 
 #[cfg(windows)]

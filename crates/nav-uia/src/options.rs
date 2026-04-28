@@ -15,6 +15,15 @@ pub enum FallbackPolicy {
     MsaaOnly,
 }
 
+/// UIA `FindAll` tree match: **Fast** = explicit patterns only (low latency). **Full** = also
+/// keyboard-focusable + common control types (more candidates, slower on large trees).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum EnumerationProfile {
+    #[default]
+    Fast,
+    Full,
+}
+
 /// Controls what the slow baseline enumerator returns.
 #[derive(Clone, Debug)]
 pub struct EnumOptions {
@@ -23,6 +32,10 @@ pub struct EnumOptions {
     pub include_offscreen: bool,
     pub include_disabled: bool,
     pub fallback: FallbackPolicy,
+    /// Fast enumerates fewer nodes in the provider; Full keeps parity with older broad matching.
+    pub profile: EnumerationProfile,
+    /// Stop Rust-side materialization after this wall time (partial hint list is OK).
+    pub materialize_hard_budget_ms: u64,
     /// Soft time budgets per enumerator stage (ms). When exceeded, a `tracing::warn` is emitted.
     pub budget_uia_ms: u64,
     pub budget_msaa_ms: u64,
@@ -40,6 +53,8 @@ impl Default for EnumOptions {
             include_offscreen: false,
             include_disabled: false,
             fallback: FallbackPolicy::Auto,
+            profile: EnumerationProfile::default(),
+            materialize_hard_budget_ms: 60,
             budget_uia_ms: M9_DEFAULT_BUDGET_UIA_MS,
             budget_msaa_ms: M9_DEFAULT_BUDGET_MSAA_MS,
             budget_hwnd_ms: M9_DEFAULT_BUDGET_HWND_MS,

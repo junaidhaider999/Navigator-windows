@@ -30,13 +30,13 @@ use crate::cache::{
     create_enumeration_cache_request, create_invoke_findall_cache_request,
     create_invoke_targets_find_condition,
 };
-use crate::click::left_click_rect_center;
+use crate::click::invoke_click_hint;
 use crate::enumerate::enumerate_baseline;
 use crate::fallback_hwnd::enumerate_raw_hwnd;
 use crate::fallback_msaa::{enumerate_msaa, invoke_msaa_at};
 use crate::hwnd::UiaHwnd;
 use crate::invoke::invoke_invoke_pattern;
-use crate::options::{EnumOptions, FallbackPolicy};
+use crate::options::{EnumOptions, EnumerationProfile, FallbackPolicy};
 
 fn qpc_delta_ms(freq: i64, t0: i64, t1: i64) -> f64 {
     if freq <= 0 {
@@ -58,6 +58,7 @@ fn budget_warn(stage: &str, took_ms: f64, budget_ms: u64) {
 struct CachedFindDescendantsCondition {
     include_disabled: bool,
     include_offscreen: bool,
+    profile: EnumerationProfile,
     condition: IUIAutomationCondition,
 }
 
@@ -141,6 +142,7 @@ impl UiaRuntime {
         if let Some(c) = guard.as_ref() {
             if c.include_disabled == opts.include_disabled
                 && c.include_offscreen == opts.include_offscreen
+                && c.profile == opts.profile
             {
                 return Ok(c.condition.clone());
             }
@@ -154,6 +156,7 @@ impl UiaRuntime {
         *guard = Some(CachedFindDescendantsCondition {
             include_disabled: opts.include_disabled,
             include_offscreen: opts.include_offscreen,
+            profile: opts.profile,
             condition: condition.clone(),
         });
         Ok(condition)
@@ -189,6 +192,7 @@ impl UiaRuntime {
                 Ok(NavEnumerateResult {
                     hints,
                     debug_rejects: Vec::new(),
+                    timings_ms: None,
                 })
             }
             FallbackPolicy::UiaOnly => {
@@ -247,6 +251,7 @@ impl UiaRuntime {
                     return Ok(NavEnumerateResult {
                         hints: msaa,
                         debug_rejects: r.debug_rejects,
+                        timings_ms: None,
                     });
                 }
 
@@ -267,6 +272,7 @@ impl UiaRuntime {
                 Ok(NavEnumerateResult {
                     hints: hwnd_hints,
                     debug_rejects: r.debug_rejects,
+                    timings_ms: None,
                 })
             }
         }
@@ -298,10 +304,17 @@ impl UiaRuntime {
                     &find_cond,
                 )
             }
-            Backend::Msaa => unsafe {
-                invoke_msaa_at(hwnd, hint.raw.element_id, GetForegroundWindow(), opts)
-            },
-            Backend::RawHwnd => left_click_rect_center(&hint.raw.bounds),
+            Backend::Msaa => {
+                eprintln!("[invoke] hint={} backend=MSAA", hint.label);
+                unsafe { invoke_msaa_at(hwnd, hint.raw.element_id, GetForegroundWindow(), opts) }
+            }
+            Backend::RawHwnd => {
+                eprintln!(
+                    "[invoke] hint={} backend=RawHwnd fallback=SendInputClick",
+                    hint.label
+                );
+                invoke_click_hint(&hint.raw)
+            }
         }
     }
 }
