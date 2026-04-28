@@ -1,9 +1,9 @@
 //! Detect whether keyboard focus is in a control where typing plain `/` should reach the app.
 //!
-//! Heuristics: terminal surfaces (process + HWND classes), Win32 edit classes, then UIA focused leaf
-//! and ancestors for Edit / Combo / Spinner. **`Document` is only honored on the focused element**
-//! (real editors), not on WinUI ancestors that wrap entire windows — that blocked `/` in modern UI.
-//! Integrated terminals inside IDEs (same process as the editor) may still need **`Alt+;`**.
+//! Heuristics: terminals first; Win32 class of **`hwndFocus`** (`GetGUIThreadInfo`); then UIA only when
+//! **`GetFocusedElement`** aligns with **`ElementFromHandle(hwndFocus)`** (same node or descendant).
+//! If keyboard-focus HWND and UIA “focused” element disagree (caret/UI oddities), we **do not** suppress
+//! plain `/` — keystrokes would not go to that field anyway, so Navigator activation is safe.
 
 use std::sync::Once;
 
@@ -15,8 +15,8 @@ use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, CUIAutomation8, IUIAutomation, UIA_ComboBoxControlTypeId, UIA_DocumentControlTypeId,
-    UIA_EditControlTypeId, UIA_SpinnerControlTypeId,
+    CUIAutomation, CUIAutomation8, IUIAutomation, IUIAutomationElement, UIA_ComboBoxControlTypeId,
+    UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_SpinnerControlTypeId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetParent, GetWindowThreadProcessId,
@@ -231,44 +231,65 @@ fn process_exe_path(pid: u32) -> Option<String> {
     Some(std::string::String::from_utf16_lossy(&buf[..len]).into())
 }
 
-/// True when UIA indicates real text entry. Ancestor **`Document`** is ignored — WinUI often wraps
-/// whole windows in `Document`, which falsely suppressed plain `/` outside editors.
+/// True when UIA's focused element matches **keyboard** focus (`hwndFocus`), and that element is a
+/// text surface. No unconditional ancestor Edit walk — misaligned focus/caret cases keep `/` usable.
 fn uia_focus_implies_text_input(automation: &IUIAutomation) -> bool {
-    let Ok(focused) = (unsafe { automation.GetFocusedElement() }) else {
+    let Some(hwnd_focus) = foreground_thread_focus_hwnd() else {
         return false;
     };
+    let Ok(el_hwnd) = (unsafe { automation.ElementFromHandle(hwnd_focus) }) else {
+        return false;
+    };
+    let Ok(fe) = (unsafe { automation.GetFocusedElement() }) else {
+        return false;
+    };
+
+    if !uia_focus_aligned_with_keyboard_hwnd(automation, &fe, &el_hwnd) {
+        return false;
+    }
+
     let browser_doc_pass_through = foreground_process_browserish();
 
-    if let Ok(ct) = unsafe { focused.CurrentControlType() } {
+    if let Ok(ct) = unsafe { fe.CurrentControlType() } {
         if ct == UIA_EditControlTypeId
             || ct == UIA_ComboBoxControlTypeId
             || ct == UIA_SpinnerControlTypeId
         {
             return true;
         }
-        // True document editors (Word canvas, etc.). Browsers use `Document` for pages — skip via browser list.
         if ct == UIA_DocumentControlTypeId && !browser_doc_pass_through {
             return true;
         }
     }
+    false
+}
 
+/// `GetFocusedElement` must be the same node as `ElementFromHandle(hwndFocus)`, or a **descendant**
+/// of it — i.e. real input goes to the HWND that owns keyboard focus.
+fn uia_focus_aligned_with_keyboard_hwnd(
+    automation: &IUIAutomation,
+    fe: &IUIAutomationElement,
+    el_hwnd: &IUIAutomationElement,
+) -> bool {
+    if unsafe { automation.CompareElements(fe, el_hwnd) }
+        .map(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return true;
+    }
     let Ok(walker) = (unsafe { automation.ControlViewWalker() }) else {
         return false;
     };
-
-    let mut cur = unsafe { walker.GetParentElement(&focused) }.ok();
-    for _ in 0..27 {
+    let mut cur = unsafe { walker.GetParentElement(fe) }.ok();
+    for _ in 0..64 {
         let Some(e) = cur.take() else {
-            break;
+            return false;
         };
-        if let Ok(ct) = unsafe { e.CurrentControlType() } {
-            if ct == UIA_EditControlTypeId
-                || ct == UIA_ComboBoxControlTypeId
-                || ct == UIA_SpinnerControlTypeId
-            {
-                return true;
-            }
-            // Do **not** treat `Document` here — it is often a WinUI scroll/root, not the focused editor.
+        if unsafe { automation.CompareElements(&e, el_hwnd) }
+            .map(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return true;
         }
         cur = unsafe { walker.GetParentElement(&e) }.ok();
     }
