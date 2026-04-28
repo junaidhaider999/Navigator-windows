@@ -4,11 +4,13 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 
-use windows::Win32::Foundation::{CloseHandle, HWND};
+use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetWindowThreadProcessId};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetClassNameW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+};
 
 use crate::hwnd::UiaHwnd;
 use crate::options::EnumerationStrategyMode;
@@ -156,4 +158,28 @@ pub fn resolve_enumeration_behavior(
         EnumerationStrategyMode::Win32First => (ResolvedLadder::Win32First, false),
         EnumerationStrategyMode::ChromiumFast => (ResolvedLadder::UiaFirst, true),
     }
+}
+
+/// Window title hash + outer rect (invalidates hot cache on move/rename).
+#[must_use]
+pub fn window_cache_key(hwnd: UiaHwnd) -> (u64, i32, i32, i32, i32) {
+    let h = HWND(hwnd.0);
+    let mut buf = vec![0u16; 512];
+    let n = unsafe { GetWindowTextW(h, &mut buf) } as usize;
+    let slice_len = n.min(buf.len());
+    let title_fp = fnv1a_utf16(&buf[..slice_len]);
+    let mut r = RECT::default();
+    let _ = unsafe { GetWindowRect(h, &mut r) };
+    (title_fp, r.left, r.top, r.right, r.bottom)
+}
+
+fn fnv1a_utf16(s: &[u16]) -> u64 {
+    let mut h: u64 = 14695981039346656037;
+    for &u in s {
+        for b in u.to_le_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(1099511628211);
+        }
+    }
+    h
 }

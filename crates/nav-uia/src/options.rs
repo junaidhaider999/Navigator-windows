@@ -62,6 +62,16 @@ pub struct EnumOptions {
     pub strategy_mode: EnumerationStrategyMode,
     /// When true, skip Rayon HWND-subtree parallel path in [`crate::enumerate::enumerate_baseline`].
     pub disable_uia_parallel: bool,
+    /// When true, run [`TreeScope_Children`] FindAll first (cheap); stop if enough hints (Chromium).
+    pub uia_shallow_children_first: bool,
+    /// Minimum actionable rows from shallow pass before skipping deep [`TreeScope_Descendants`] FindAll.
+    pub uia_shallow_min_targets: usize,
+    /// Materialize budget for the shallow pass only (ms).
+    pub uia_shallow_materialize_budget_ms: u64,
+    /// Explorer Win32-first: if HWND hints count is below this, run a bounded UIA enrich pass (0 = off).
+    pub explorer_enrich_if_below: usize,
+    /// Materialize budget for Explorer UIA enrich (ms).
+    pub explorer_enrich_materialize_budget_ms: u64,
 }
 
 impl Default for EnumOptions {
@@ -80,6 +90,11 @@ impl Default for EnumOptions {
             debug_overlay: false,
             strategy_mode: EnumerationStrategyMode::default(),
             disable_uia_parallel: false,
+            uia_shallow_children_first: false,
+            uia_shallow_min_targets: 8,
+            uia_shallow_materialize_budget_ms: 12,
+            explorer_enrich_if_below: 0,
+            explorer_enrich_materialize_budget_ms: 28,
         }
     }
 }

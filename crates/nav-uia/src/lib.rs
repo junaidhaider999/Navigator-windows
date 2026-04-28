@@ -33,6 +33,8 @@ mod invoke;
 #[cfg(windows)]
 mod pattern;
 #[cfg(windows)]
+mod profile;
+#[cfg(windows)]
 mod runtime;
 #[cfg(windows)]
 mod strategy;
@@ -40,7 +42,9 @@ mod strategy;
 #[cfg(windows)]
 pub use runtime::UiaRuntime;
 #[cfg(windows)]
-pub use strategy::{probe_window, resolve_enumeration_behavior, ResolvedLadder, WindowProbe};
+pub use strategy::{
+    probe_window, resolve_enumeration_behavior, window_cache_key, ResolvedLadder, WindowProbe,
+};
 
 #[cfg(not(windows))]
 use nav_core::{Hint, NavEnumerateResult};

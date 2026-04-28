@@ -102,6 +102,56 @@ pub fn enumerate_baseline(
     let true_cond = unsafe { automation.CreateTrueCondition() }
         .map_err(|e| UiaError::Operation(e.to_string()))?;
 
+    if opts.uia_shallow_children_first {
+        let t_shallow_find = Instant::now();
+        let (children_arr, ch_cached) = descendants_cached_or_uncached(
+            &root,
+            TreeScope_Children,
+            find_descendants_cond,
+            cache,
+        )?;
+        let shallow_find_ms = t_shallow_find.elapsed().as_secs_f64() * 1000.0;
+
+        let mut shallow_opts = opts.clone();
+        shallow_opts.materialize_hard_budget_ms = opts
+            .uia_shallow_materialize_budget_ms
+            .min(opts.materialize_hard_budget_ms);
+
+        let t_shallow_mat = Instant::now();
+        let shallow_hints = collect_from_descendants_array(
+            &children_arr,
+            &shallow_opts,
+            hwnd,
+            None,
+            None,
+            ch_cached,
+            &reject_sink,
+        )?;
+        let shallow_mat_ms = t_shallow_mat.elapsed().as_secs_f64() * 1000.0;
+
+        if shallow_hints.len() >= opts.uia_shallow_min_targets {
+            eprintln!(
+                "[uia_shallow] children_only hints={} find_ms={:.2} mat_ms={:.2}",
+                shallow_hints.len(),
+                shallow_find_ms,
+                shallow_mat_ms
+            );
+            return Ok(NavEnumerateResult {
+                hints: shallow_hints,
+                debug_rejects: take_rejects(&reject_sink),
+                timings_ms: Some(UiaEnumerateTimingsMs {
+                    findall_ms: shallow_find_ms,
+                    materialize_ms: shallow_mat_ms,
+                }),
+            });
+        }
+        eprintln!(
+            "[uia_shallow] fallback_deep shallow_hints={} min_targets={}",
+            shallow_hints.len(),
+            opts.uia_shallow_min_targets
+        );
+    }
+
     let t_find = Instant::now();
     let (all, root_cached) =
         descendants_cached_or_uncached(&root, TreeScope_Descendants, find_descendants_cond, cache)?;
@@ -422,7 +472,11 @@ fn collect_from_descendants_array(
         };
         let rect = match bounds {
             Ok(r) => match rect_from_uia_bounds(r) {
-                Some(r) => r,
+                Some(r) if r.w >= 6 && r.h >= 6 => r,
+                Some(_) => {
+                    push_reject(reject_sink, opts, "tiny_rect", None);
+                    continue;
+                }
                 None => {
                     if opts.debug_uia {
                         eprintln!("[uia-debug] skip idx={i} reason=no_or_zero_rect");

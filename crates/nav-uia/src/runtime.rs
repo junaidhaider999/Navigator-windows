@@ -37,6 +37,7 @@ use crate::fallback_msaa::{enumerate_msaa, invoke_msaa_at};
 use crate::hwnd::UiaHwnd;
 use crate::invoke::invoke_invoke_pattern;
 use crate::options::{EnumOptions, EnumerationProfile, FallbackPolicy};
+use crate::profile::apply_exe_profile;
 use crate::strategy::{ResolvedLadder, probe_window, resolve_enumeration_behavior};
 
 fn qpc_delta_ms(freq: i64, t0: i64, t1: i64) -> f64 {
@@ -174,15 +175,18 @@ impl UiaRuntime {
         opts: &EnumOptions,
     ) -> Result<NavEnumerateResult, UiaError> {
         let probe = probe_window(hwnd);
+        let mut opts_eff = opts.clone();
+        apply_exe_profile(&probe.exe_basename, &mut opts_eff);
         let (ladder, disable_parallel) =
             resolve_enumeration_behavior(opts.strategy_mode, &probe);
-        let mut opts_eff = opts.clone();
         opts_eff.disable_uia_parallel = disable_parallel;
 
         eprintln!(
-            "[strategy_detect] ladder={:?} parallel_off={} pid={} class={} exe={}",
+            "[strategy_detect] ladder={:?} parallel_off={} shallow_first={} enrich_below={} pid={} class={} exe={}",
             ladder,
             disable_parallel,
+            opts_eff.uia_shallow_children_first,
+            opts_eff.explorer_enrich_if_below,
             probe.pid,
             probe.class_name,
             probe.exe_basename
@@ -320,8 +324,44 @@ impl UiaRuntime {
                         opts_eff.budget_hwnd_ms,
                     );
                     if !hwnd_hints.is_empty() {
+                        let mut merged = hwnd_hints;
+                        if opts_eff.explorer_enrich_if_below > 0
+                            && probe.exe_basename.eq_ignore_ascii_case("explorer.exe")
+                            && merged.len() < opts_eff.explorer_enrich_if_below
+                        {
+                            eprintln!(
+                                "[explorer_enrich] hwnd_hints={} threshold={}",
+                                merged.len(),
+                                opts_eff.explorer_enrich_if_below
+                            );
+                            let mut eu = opts_eff.clone();
+                            eu.materialize_hard_budget_ms = opts_eff
+                                .explorer_enrich_materialize_budget_ms
+                                .min(opts_eff.materialize_hard_budget_ms);
+                            eu.uia_shallow_children_first = false;
+                            let enrich = enumerate_baseline(
+                                &self.automation,
+                                hwnd,
+                                &eu,
+                                &self.enum_cache,
+                                &find_cond,
+                            )?;
+                            merged.extend(enrich.hints);
+                            merged.sort_by(|a, b| {
+                                a.bounds
+                                    .y
+                                    .cmp(&b.bounds.y)
+                                    .then_with(|| a.bounds.x.cmp(&b.bounds.x))
+                            });
+                            merged.truncate(opts_eff.max_elements);
+                            return Ok(NavEnumerateResult {
+                                hints: merged,
+                                debug_rejects: enrich.debug_rejects,
+                                timings_ms: enrich.timings_ms,
+                            });
+                        }
                         return Ok(NavEnumerateResult {
-                            hints: hwnd_hints,
+                            hints: merged,
                             debug_rejects: Vec::new(),
                             timings_ms: None,
                         });
