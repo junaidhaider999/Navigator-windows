@@ -133,6 +133,7 @@ fn main() -> std::process::ExitCode {
         hint_cache_ttl_ms: cfg.hints.hint_cache_ttl_ms,
         pipeline_soft_budget_ms: cfg.hints.pipeline_soft_budget_ms as f64,
         pipeline_hard_budget_ms: cfg.hints.pipeline_hard_budget_ms as f64,
+        planner_label_cap: cfg.hints.planner_label_cap,
         hint_cache: None,
     }));
     let last_focus: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
@@ -171,6 +172,7 @@ fn main() -> std::process::ExitCode {
                 hint_cache_ttl_ms: c.hints.hint_cache_ttl_ms,
                 pipeline_soft_budget_ms: c.hints.pipeline_soft_budget_ms as f64,
                 pipeline_hard_budget_ms: c.hints.pipeline_hard_budget_ms as f64,
+                planner_label_cap: c.hints.planner_label_cap,
                 hint_cache: None,
             };
             if let Err(e) = input.reregister_hotkey(&c.hotkey.chord) {
@@ -270,6 +272,8 @@ struct CliSnapshot {
 struct HintSessionCache {
     hwnd: usize,
     pid: u32,
+    title_fp: u64,
+    rect_ltrb: (i32, i32, i32, i32),
     raws_deduped: Vec<nav_core::RawHint>,
     debug_rejects: Vec<nav_core::UiaDebugReject>,
     at: std::time::Instant,
@@ -282,6 +286,7 @@ struct AppState {
     hint_cache_ttl_ms: u64,
     pipeline_soft_budget_ms: f64,
     pipeline_hard_budget_ms: f64,
+    planner_label_cap: usize,
     hint_cache: Option<HintSessionCache>,
 }
 
@@ -453,12 +458,16 @@ fn dispatch_input(
             }
 
             let probe = nav_uia::probe_window(hwnd);
+            let cache_key = nav_uia::window_cache_key(hwnd);
 
             let cache_hit = {
                 let st = app.lock().expect("state");
                 st.hint_cache.as_ref().is_some_and(|c| {
                     c.hwnd == p.captured_hwnd
                         && c.pid == probe.pid
+                        && c.title_fp == cache_key.0
+                        && c.rect_ltrb
+                            == (cache_key.1, cache_key.2, cache_key.3, cache_key.4)
                         && c.at.elapsed()
                             < std::time::Duration::from_millis(st.hint_cache_ttl_ms.max(1))
                 })
@@ -475,8 +484,8 @@ fn dispatch_input(
                     )
                 };
                 eprintln!(
-                    "[cache_hit] hwnd=0x{:x} pid={} age_ms={:.1}",
-                    p.captured_hwnd, probe.pid, age_ms
+                    "[cache_hit] hwnd=0x{:x} pid={} title_fp=0x{:x} age_ms={:.1}",
+                    p.captured_hwnd, probe.pid, cache_key.0, age_ms
                 );
                 eprintln!("[dedupe] cache_hit=1 dedupe_ms=0.00");
                 (raws_deduped, dbg)
@@ -553,6 +562,8 @@ fn dispatch_input(
                     st.hint_cache = Some(HintSessionCache {
                         hwnd: p.captured_hwnd,
                         pid: probe.pid,
+                        title_fp: cache_key.0,
+                        rect_ltrb: (cache_key.1, cache_key.2, cache_key.3, cache_key.4),
                         raws_deduped: raws.clone(),
                         debug_rejects: debug_rejects.clone(),
                         at: std::time::Instant::now(),
@@ -579,7 +590,10 @@ fn dispatch_input(
                 }
             };
 
-            let alphabet = app.lock().expect("state").alphabet.clone();
+            let (alphabet, planner_cap) = {
+                let st = app.lock().expect("state");
+                (st.alphabet.clone(), st.planner_label_cap)
+            };
 
             let mut t_plan_0 = 0i64;
             if unsafe { QueryPerformanceCounter(&mut t_plan_0) }.is_err() {
@@ -587,7 +601,7 @@ fn dispatch_input(
                 return;
             }
 
-            let hints = plan(raws, &alphabet, layout_origin);
+            let hints = plan(raws, &alphabet, layout_origin, planner_cap);
 
             let mut t_plan_1 = 0i64;
             if unsafe { QueryPerformanceCounter(&mut t_plan_1) }.is_err() {
