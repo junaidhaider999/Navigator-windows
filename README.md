@@ -6,9 +6,17 @@ A keyboard-native UI navigator for **Windows**, rewritten in Rust.
 
 ## Screenshots
 
-| Notepad | File Explorer |
-| :---: | :---: |
-| ![Navigator hints in Notepad](public/screenshots/notepad.png) | ![Navigator hints in Explorer](public/screenshots/explorer.png) |
+### Notepad
+
+<p align="center">
+  <img src="public/screenshots/notepad.png" alt="Navigator hints in Notepad" width="92%" />
+</p>
+
+### File Explorer
+
+<p align="center">
+  <img src="public/screenshots/explorer.png" alt="Navigator hints in File Explorer" width="92%" />
+</p>
 
 ## Credits
 
