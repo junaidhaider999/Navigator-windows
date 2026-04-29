@@ -1,8 +1,10 @@
-# Navigator v1.0
+# Navigator v1.1
 
 Press a hotkey. Hints appear. Type letters. Act.
 
 A keyboard-native UI navigator for **Windows**, rewritten in Rust.
+
+The release `navigator.exe` is built as a **Windows subsystem** application (release builds only) so double-clicking it does **not** open a console window. Debug builds still use the console so `cargo run` shows logs. CLI flags (for example `--print-config`) work when run from an existing terminal.
 
 ## Screenshots
 
@@ -46,13 +48,13 @@ Output: `target/release/navigator.exe`.
 
 ### User zip (release layout)
 
-To rebuild the files under `user-space/` and the release zip `navigator-vX.Y.Z-windows-x86_64.zip` (version from `[workspace.package]` in the root `Cargo.toml`; contents: exe, `README.txt`, `LICENSE`, `screenshots/`), from the repo root run:
+To copy `target/release/navigator.exe` into `user-space/` and create `navigator-vX.Y.Z-windows-x86_64.zip` (version from `[workspace.package]` in the root `Cargo.toml`; **zip contains only** `navigator.exe` and `user-space/README.txt`), from the repo root run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File user-space/package.ps1
 ```
 
-Generated `navigator.exe`, `LICENSE` copies, `screenshots/`, and `*.zip` in `user-space/` are gitignored; `user-space/README.txt` and `user-space/package.ps1` are versioned.
+The staged `navigator.exe` and `*.zip` under `user-space/` are gitignored; `user-space/README.txt` and `user-space/package.ps1` are versioned.
 
 Developers:
 

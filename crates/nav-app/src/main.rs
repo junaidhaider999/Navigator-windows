@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 #[cfg(not(windows))]
 fn main() -> std::process::ExitCode {
     eprintln!("Navigator requires Windows.");

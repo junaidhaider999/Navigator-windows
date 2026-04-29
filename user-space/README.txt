@@ -1,35 +1,14 @@
-Navigator v1.0 — Windows user bundle
-======================================
+Navigator 1.1 — Windows
+=========================
 
-WHAT THIS IS
-------------
-Navigator draws letter hints on top of buttons and other controls so you can
-click them from the keyboard (similar idea to Hunt-and-Peck).
+Run `navigator.exe`. One copy stays in the system tray.
 
+- Press `/` to show hints on the focused window.
+- Press `/` again to type in that window (hints stay on screen; Esc closes them).
+- Press `Esc` to close hints.
 
-RUN
----
-1. Double-click navigator.exe (one copy stays running; check the system tray).
-2. Click into any normal window (Notepad, File Explorer, a browser, …).
-3. Press / (forward slash) to show hints — that is the default hotkey. Type the
-   letters on a target to narrow and activate it.
-4. Press / again while hints are showing to type normally in the focused window
-   (hint letters are ignored until you press Esc). Press Esc to cancel hints.
+Optional settings file:
+  %APPDATA%\Navigator\config.toml
 
-You can change the hotkey in %APPDATA%\Navigator\config.toml under [hotkey].
-
-
-FILES IN THIS FOLDER
----------------------
-navigator.exe   Application
-LICENSE         GNU General Public License v3.0 (full text)
-README.txt      This file
-screenshots/    Example screenshots (optional)
-
-
-SOURCE CODE (GPL)
------------------
-You should receive corresponding source with this binary. If you downloaded a
-zip from the project’s releases page, use the same version tag on GitHub to
-get the matching source tree.
-
+This program is licensed under the GNU GPL v3.0. You should receive source
+code with this binary; if not, obtain it from the same place you got the exe.
