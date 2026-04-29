@@ -20,10 +20,10 @@ Thank you, **zsims**, for the concept and the reference implementation.
 
 1. Run **`navigator.exe`** (see **Build**).
 2. Focus a normal window (e.g. Notepad or Explorer).
-3. Press **`Alt+/`** to open hints everywhere. You can also use plain **`/`** when focus is not in a text field (see in-app behavior).
+3. Press **`/`** (default hotkey) to open hints. You can set a different chord in `config.toml` under **`[hotkey].chord`** (e.g. `alt+/`).
 4. Type the shown letters to filter, then activate the target.
 
-**Esc** or pressing the global hotkey again cancels.
+Press **`/`** again while hints are visible to **type in the focused app** (including another **`/`**); hint letters are ignored until you press **Esc**. **Esc** closes the overlay (same as canceling from normal hint mode).
 
 ## Build
 

@@ -136,12 +136,12 @@ impl Default for HintsConfig {
 }
 
 fn default_hotkey_chord() -> String {
-    "alt+/".to_string()
+    "/".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HotkeyConfig {
-    /// e.g. `alt+/`, `ctrl+shift+a` (parsed by `nav-input`).
+    /// e.g. `/`, `slash`, `alt+/`, `ctrl+shift+a` (parsed by `nav-input`; `/` is hook-only).
     #[serde(default = "default_hotkey_chord")]
     pub chord: String,
 }

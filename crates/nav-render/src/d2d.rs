@@ -26,7 +26,8 @@ use windows::Win32::Graphics::DirectComposition::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWriteCreateFactory, IDWriteFactory,
+    IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
@@ -66,6 +67,7 @@ pub struct D2dCompositionRenderer {
     swap_chain: IDXGISwapChain1,
     write: IDWriteFactory,
     text_format: IDWriteTextFormat,
+    tooltip_text_format: IDWriteTextFormat,
     stroke: ID2D1StrokeStyle1,
     pill_fill: ID2D1SolidColorBrush,
     pill_border: ID2D1SolidColorBrush,
@@ -212,6 +214,18 @@ impl D2dCompositionRenderer {
             )
             .map_err(|e| RenderError::Win32(e.to_string()))?;
 
+        let tooltip_text_format = write
+            .CreateTextFormat(
+                w!("Segoe UI"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                scene::TOOLTIP_FONT_EM_DIPS,
+                w!("en-us"),
+            )
+            .map_err(|e| RenderError::Win32(e.to_string()))?;
+
         let stroke_props = D2D1_STROKE_STYLE_PROPERTIES1 {
             startCap: D2D1_CAP_STYLE_FLAT,
             endCap: D2D1_CAP_STYLE_FLAT,
@@ -275,6 +289,7 @@ impl D2dCompositionRenderer {
             swap_chain,
             write,
             text_format,
+            tooltip_text_format,
             stroke,
             pill_fill,
             pill_border,
@@ -433,7 +448,15 @@ impl D2dCompositionRenderer {
             &self.pill_text,
             &self.stroke,
         )?;
-
+        scene::draw_hint_tooltip(
+            &self.d2d_ctx,
+            &self.write,
+            &self.tooltip_text_format,
+            &self.pill_text,
+            cw,
+            ch,
+            opts.hint_tooltip,
+        )?;
         self.last_pills = new_pills;
         self.last_debug = new_debug;
         self.last_overlay_opts = opts;

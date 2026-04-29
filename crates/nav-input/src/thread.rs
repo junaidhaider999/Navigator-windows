@@ -27,6 +27,13 @@ use windows::core::PCWSTR;
 use crate::chord;
 use crate::focus;
 use crate::hotkey::PRIMARY_HOTKEY_ID;
+
+#[inline]
+fn chord_is_plain_slash_only(raw: &str) -> bool {
+    crate::hotkey_chord_is_plain_slash_only(raw)
+}
+
+static PLAIN_SLASH_ONLY_MODE: AtomicBool = AtomicBool::new(false);
 use crate::{HotkeyPress, InputError, InputEvent, SessionKey};
 
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -75,6 +82,8 @@ static PUMP_CTX: OnceLock<PumpCtx> = OnceLock::new();
 struct HookState {
     tx: Sender<InputEvent>,
     hint_mode: Arc<AtomicBool>,
+    /// When true with `hint_mode`, keys go to the focused app except Esc (which closes hints).
+    keyboard_passthrough: Arc<AtomicBool>,
     /// Same QPC frequency as [`PumpCtx`] so plain-`/` dispatch never depends on `PUMP_CTX`.
     qpc_freq: i64,
 }
@@ -89,6 +98,11 @@ fn class_pcwstr() -> PCWSTR {
 fn try_reregister_hotkey(hwnd: HWND, new_mods: HOT_KEY_MODIFIERS, new_vk: u32) {
     let (old_mods, old_vk) = load_hotkey();
     let _ = unsafe { UnregisterHotKey(Some(hwnd), PRIMARY_HOTKEY_ID) };
+    let slash_only = PLAIN_SLASH_ONLY_MODE.load(Ordering::Acquire);
+    if slash_only {
+        store_hotkey(new_mods, new_vk);
+        return;
+    }
     if let Err(e) = unsafe { RegisterHotKey(Some(hwnd), PRIMARY_HOTKEY_ID, new_mods, new_vk) } {
         eprintln!("[input] hotkey reload failed: {e}. Restoring previous registration.");
         if unsafe { RegisterHotKey(Some(hwnd), PRIMARY_HOTKEY_ID, old_mods, old_vk) }.is_err() {
@@ -222,7 +236,23 @@ unsafe extern "system" fn low_level_keyboard_proc(
     }
 
     if state.hint_mode.load(Ordering::Acquire) {
+        if state.keyboard_passthrough.load(Ordering::Acquire) {
+            if vk == VK_ESCAPE.0 as u32 {
+                let _ = state.tx.send(InputEvent::SessionKey(SessionKey::Escape));
+                return LRESULT(1);
+            }
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
         let (reg_mods, reg_vk) = load_hotkey();
+        // Plain `/` chord: `/` must not reach the focused app while hints are up (second `/` → editing).
+        if PLAIN_SLASH_ONLY_MODE.load(Ordering::Acquire)
+            && is_plain_slash_vk(vk)
+            && (flags & LLKHF_INJECTED) == 0
+            && !modifiers_preclude_plain_slash_activator()
+        {
+            dispatch_plain_slash_hotkey(state);
+            return LRESULT(1);
+        }
         if vk == reg_vk && hotkey_mods_satisfied(reg_mods.0) {
             return unsafe { CallNextHookEx(None, code, wparam, lparam) };
         }
@@ -262,10 +292,6 @@ unsafe extern "system" fn low_level_keyboard_proc(
     if modifiers_preclude_plain_slash_activator() {
         return unsafe { CallNextHookEx(None, code, wparam, lparam) };
     }
-    if focus::focused_control_suppresses_plain_slash_hotkey() {
-        PLAIN_SLASH_AWAITING_KEYUP.store(false, Ordering::Release);
-        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-    }
 
     if PLAIN_SLASH_AWAITING_KEYUP.load(Ordering::Acquire) {
         return LRESULT(1);
@@ -303,6 +329,7 @@ pub(super) fn poke_peer_for_foreground() {
 pub struct InputThread {
     _join: JoinHandle<()>,
     pub hint_mode: Arc<AtomicBool>,
+    pub keyboard_passthrough: Arc<AtomicBool>,
 }
 
 impl InputThread {
@@ -310,12 +337,20 @@ impl InputThread {
     pub fn spawn_with_chord(
         chord: &str,
     ) -> Result<(Self, crossbeam_channel::Receiver<InputEvent>), InputError> {
-        let (init_mods, init_vk) = chord::parse_chord(chord)
-            .map_err(|e| InputError::HotkeyRegisterFailed { details: e })?;
+        let slash_only = chord_is_plain_slash_only(chord);
+        PLAIN_SLASH_ONLY_MODE.store(slash_only, Ordering::Release);
+        let (init_mods, init_vk) = if slash_only {
+            (HOT_KEY_MODIFIERS(MOD_NOREPEAT.0), VK_OEM_2.0 as u32)
+        } else {
+            chord::parse_chord(chord)
+                .map_err(|e| InputError::HotkeyRegisterFailed { details: e })?
+        };
         let (tx, rx) = crossbeam_channel::unbounded();
         let (started_tx, started_rx) = mpsc::channel::<Result<(), InputError>>();
         let hint_mode = Arc::new(AtomicBool::new(false));
         let hint_for_thread = hint_mode.clone();
+        let keyboard_passthrough = Arc::new(AtomicBool::new(false));
+        let passthrough_for_thread = keyboard_passthrough.clone();
 
         let join = std::thread::spawn(move || {
             let setup = || -> Result<(HWND, HHOOK), InputError> {
@@ -372,6 +407,7 @@ impl InputThread {
                 let _ = HOOK_STATE.set(HookState {
                     tx: tx.clone(),
                     hint_mode: hint_for_thread,
+                    keyboard_passthrough: passthrough_for_thread,
                     qpc_freq: freq,
                 });
 
@@ -384,16 +420,18 @@ impl InputThread {
                     )?
                 };
 
-                if let Err(e) =
-                    unsafe { RegisterHotKey(Some(hwnd), PRIMARY_HOTKEY_ID, init_mods, init_vk) }
-                {
-                    unsafe {
-                        let _ = UnhookWindowsHookEx(hook);
-                        let _ = DestroyWindow(hwnd);
+                if !slash_only {
+                    if let Err(e) =
+                        unsafe { RegisterHotKey(Some(hwnd), PRIMARY_HOTKEY_ID, init_mods, init_vk) }
+                    {
+                        unsafe {
+                            let _ = UnhookWindowsHookEx(hook);
+                            let _ = DestroyWindow(hwnd);
+                        }
+                        return Err(InputError::HotkeyRegisterFailed {
+                            details: e.to_string(),
+                        });
                     }
-                    return Err(InputError::HotkeyRegisterFailed {
-                        details: e.to_string(),
-                    });
                 }
                 store_hotkey(init_mods, init_vk);
                 let _ = INPUT_HWND.set(hwnd.0 as usize);
@@ -449,6 +487,7 @@ impl InputThread {
                 InputThread {
                     _join: join,
                     hint_mode,
+                    keyboard_passthrough,
                 },
                 rx,
             )),
@@ -459,8 +498,14 @@ impl InputThread {
 
     /// Re-parses `chord` and re-registers the hotkey on the input thread (e.g. after tray Reload).
     pub fn reregister_hotkey(&self, chord: &str) -> Result<(), InputError> {
-        let (mods, vk) = chord::parse_chord(chord)
-            .map_err(|e| InputError::HotkeyRegisterFailed { details: e })?;
+        let slash_only = chord_is_plain_slash_only(chord);
+        PLAIN_SLASH_ONLY_MODE.store(slash_only, Ordering::Release);
+        let (mods, vk) = if slash_only {
+            (HOT_KEY_MODIFIERS(MOD_NOREPEAT.0), VK_OEM_2.0 as u32)
+        } else {
+            chord::parse_chord(chord)
+                .map_err(|e| InputError::HotkeyRegisterFailed { details: e })?
+        };
         let Some(&raw) = INPUT_HWND.get() else {
             return Err(InputError::ThreadEndedDuringStartup);
         };

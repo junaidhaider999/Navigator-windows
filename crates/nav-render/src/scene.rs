@@ -15,11 +15,12 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, IDWriteFactory, IDWriteTextFormat,
+    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS,
+    DWRITE_WORD_WRAPPING_WRAP, IDWriteFactory, IDWriteTextFormat,
 };
 use windows::core::Interface;
 
-use crate::RenderError;
+use crate::{HintTooltipMode, RenderError};
 
 /// One rounded pill with a UTF-8 label.
 #[derive(Clone, Debug, PartialEq)]
@@ -182,6 +183,8 @@ pub fn overlay_paint_plan(
 
 /// Em height (DIPs) for hint labels; must match `CreateTextFormat` in `d2d::D2dCompositionRenderer::new`.
 pub const PILL_FONT_EM_DIPS: f32 = 11.5;
+/// Footer hint (`draw_hint_tooltip`): smaller than pill labels.
+pub const TOOLTIP_FONT_EM_DIPS: f32 = 8.25;
 const PILL_PAD_X: f32 = 4.5;
 const PILL_PAD_Y: f32 = 2.5;
 /// Tight gap between invoke anchor and pill (4–6 px DIPs; locality over polish).
@@ -785,6 +788,104 @@ pub unsafe fn draw_pills(
     Ok(())
 }
 
+#[must_use]
+pub fn hint_tooltip_text(mode: HintTooltipMode) -> Option<&'static str> {
+    match mode {
+        HintTooltipMode::Hidden => None,
+        HintTooltipMode::Navigate => {
+            Some("Press the activation key again to type here · Esc closes hints")
+        }
+        HintTooltipMode::TypeInApp => Some("Typing goes to the app · Esc closes hints"),
+    }
+}
+
+/// Small bottom-left hint (drawn in the overlay, not a Win32 tooltip); call after [`draw_pills`].
+pub unsafe fn draw_hint_tooltip(
+    dc: &ID2D1DeviceContext,
+    write: &IDWriteFactory,
+    tooltip_format: &IDWriteTextFormat,
+    text_brush: &ID2D1SolidColorBrush,
+    client_w: f32,
+    client_h: f32,
+    mode: HintTooltipMode,
+) -> Result<(), RenderError> {
+    let Some(text) = hint_tooltip_text(mode) else {
+        return Ok(());
+    };
+    dc.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
+    let margin_left = 8.0f32;
+    let margin_bottom = 10.0f32;
+    let pad_x = 5.0f32;
+    let pad_y = 3.0f32;
+    let max_text_w = (client_w - margin_left - 10.0).clamp(72.0, 280.0);
+    let layout_max_h = 36.0f32;
+
+    let wtext: Vec<u16> = text.encode_utf16().collect();
+    let layout = write
+        .CreateTextLayout(&wtext, tooltip_format, max_text_w, layout_max_h)
+        .map_err(|e| RenderError::Win32(e.to_string()))?;
+    layout
+        .SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)
+        .map_err(|e| RenderError::Win32(e.to_string()))?;
+    layout
+        .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)
+        .map_err(|e| RenderError::Win32(e.to_string()))?;
+    layout
+        .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)
+        .map_err(|e| RenderError::Win32(e.to_string()))?;
+
+    let mut m = DWRITE_TEXT_METRICS::default();
+    layout
+        .GetMetrics(&mut m)
+        .map_err(|e| RenderError::Win32(e.to_string()))?;
+
+    let box_w_max = (client_w - margin_left - 6.0).max(28.0);
+    let box_w = (m.width + pad_x * 2.0).clamp(28.0, box_w_max);
+    let box_h = (m.height + pad_y * 2.0).clamp(16.0, 40.0);
+    let left = margin_left;
+    let top = (client_h - margin_bottom - box_h).max(4.0);
+    let rect = D2D_RECT_F {
+        left,
+        top,
+        right: left + box_w,
+        bottom: top + box_h,
+    };
+
+    let bg = dc
+        .CreateSolidColorBrush(
+            &D2D1_COLOR_F {
+                r: 0.04,
+                g: 0.05,
+                b: 0.07,
+                a: 0.72,
+            },
+            None,
+        )
+        .map_err(|e| RenderError::Win32(e.to_string()))?;
+    let rr = D2D1_ROUNDED_RECT {
+        rect,
+        radiusX: 3.0,
+        radiusY: 3.0,
+    };
+    let bg_br: ID2D1Brush = bg.cast().map_err(|e| RenderError::Win32(e.to_string()))?;
+    dc.FillRoundedRectangle(&rr, &bg_br);
+
+    let opts = D2D1_DRAW_TEXT_OPTIONS_CLIP | D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT;
+    solid_brush_set_opacity(text_brush, 0.86)?;
+    dc.DrawTextLayout(
+        D2D_POINT_2F {
+            x: rect.left + pad_x,
+            y: rect.top + pad_y,
+        },
+        &layout,
+        text_brush,
+        opts,
+    );
+    let _ = solid_brush_set_opacity(text_brush, 1.0);
+    Ok(())
+}
+
 /// Opaque high-contrast pill fill (premultiplied — alpha at full strength for readability).
 pub fn pill_fill_color() -> D2D1_COLOR_F {
     D2D1_COLOR_F {
@@ -928,7 +1029,21 @@ pub unsafe fn draw_placement_truth(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::HintTooltipMode;
     use nav_core::{Backend, ElementKind, RawHint, Rect, UiaEnumerateBasis};
+
+    #[test]
+    fn hint_tooltip_text_matches_mode() {
+        assert!(hint_tooltip_text(HintTooltipMode::Hidden).is_none());
+        assert!(
+            hint_tooltip_text(HintTooltipMode::Navigate)
+                .is_some_and(|s| s.contains("activation key"))
+        );
+        assert!(
+            hint_tooltip_text(HintTooltipMode::TypeInApp)
+                .is_some_and(|s| s.contains("Typing goes"))
+        );
+    }
 
     fn hint_at(label: &str, element_id: u64, x: i32, y: i32, w: i32, h: i32) -> Hint {
         hint_scored(label, element_id, 0.0, x, y, w, h)

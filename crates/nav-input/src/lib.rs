@@ -7,7 +7,9 @@
 
 mod hotkey;
 
+/// Focus heuristics (reserved; plain `/` activation is handled in the low-level hook).
 #[cfg(windows)]
+#[allow(dead_code)]
 mod focus;
 
 #[cfg(windows)]
@@ -18,6 +20,14 @@ mod thread;
 
 #[cfg(windows)]
 pub use thread::InputThread;
+
+/// `true` when `chord` is plain `/` (or `slash`): hook-only activation, no `RegisterHotKey`.
+#[cfg(windows)]
+#[must_use]
+pub fn hotkey_chord_is_plain_slash_only(chord: &str) -> bool {
+    let t = chord.trim();
+    t == "/" || t.eq_ignore_ascii_case("slash")
+}
 
 #[cfg(not(windows))]
 mod stub;

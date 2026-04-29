@@ -25,6 +25,18 @@ use std::thread::JoinHandle;
 
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HintTooltipMode {
+    /// No footer hint (e.g. prewarm / internal defaults).
+    #[default]
+    Hidden,
+    /// Hints are filtering; second activation enters type-in-app mode.
+    Navigate,
+    /// Keys go to the focused app until Esc closes the overlay.
+    TypeInApp,
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OverlayRenderOpts {
     /// Pill center → invoke anchor connector lines.
     pub debug_connectors: bool,
@@ -34,6 +46,8 @@ pub struct OverlayRenderOpts {
     pub debug_target_rect: bool,
     /// Numeric distance (pill center to anchor, DIPs).
     pub debug_distance: bool,
+    /// Compact bottom-left hint (see `scene::draw_hint_tooltip`).
+    pub hint_tooltip: HintTooltipMode,
 }
 
 /// Owns the render worker thread and sends [`overlay::RenderCmd`] commands.

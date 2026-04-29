@@ -188,20 +188,19 @@ fn main() -> std::process::ExitCode {
 
     loop {
         if cli.no_tray {
-            let Ok(ev) = rx.recv() else {
-                break;
-            };
-            dispatch_input(
-                ev,
-                &mut l,
-                &input,
-                &uia,
-                &renderer,
-                &app,
-                &last_focus,
-                debug_pill_connectors,
-            );
-            continue;
+            while let Ok(ev) = rx.recv() {
+                dispatch_input(
+                    ev,
+                    &mut l,
+                    &input,
+                    &uia,
+                    &renderer,
+                    &app,
+                    &last_focus,
+                    debug_pill_connectors,
+                );
+            }
+            break;
         }
 
         select! {
@@ -337,6 +336,24 @@ struct LoopCtx {
 }
 
 #[cfg(windows)]
+fn hint_overlay_opts(
+    debug_connectors: bool,
+    tooltip: nav_render::HintTooltipMode,
+) -> nav_render::OverlayRenderOpts {
+    nav_render::OverlayRenderOpts {
+        debug_connectors,
+        hint_tooltip: tooltip,
+        ..Default::default()
+    }
+}
+
+#[cfg(windows)]
+fn clear_keyboard_passthrough(input: &nav_input::InputThread) {
+    use std::sync::atomic::Ordering;
+    input.keyboard_passthrough.store(false, Ordering::Release);
+}
+
+#[cfg(windows)]
 fn open_config_folder() {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::UI::Shell::ShellExecuteW;
@@ -418,13 +435,22 @@ fn dispatch_input(
             );
 
             if input.hint_mode.load(Ordering::Acquire) {
-                l.session = None;
-                l.session_hwnd = None;
-                l.active_debug_rejects.clear();
-                l.overlay_debug_only = false;
-                input.hint_mode.store(false, Ordering::Release);
-                if let Some(sid) = l.active_show_id.take() {
-                    let _ = renderer.hide(sid);
+                if input.keyboard_passthrough.load(Ordering::Acquire) {
+                    return;
+                }
+                input.keyboard_passthrough.store(true, Ordering::Release);
+                println!("[input] hint editing mode (typing goes to app; Esc closes hints)");
+                if let (Some(sid), Some(sess)) = (l.active_show_id, l.session.as_ref()) {
+                    let visible = sess.visible_hints();
+                    let _ = renderer.repaint(
+                        sid,
+                        &visible,
+                        &l.active_debug_rejects,
+                        hint_overlay_opts(
+                            debug_pill_connectors,
+                            nav_render::HintTooltipMode::TypeInApp,
+                        ),
+                    );
                 }
                 return;
             }
@@ -442,6 +468,7 @@ fn dispatch_input(
             if let Some(prev) = l.active_show_id {
                 let _ = renderer.hide(prev);
             }
+            clear_keyboard_passthrough(input);
 
             let mut freq = 0i64;
             if unsafe { QueryPerformanceFrequency(&mut freq) }.is_err() {
@@ -676,6 +703,7 @@ fn dispatch_input(
             l.overlay_debug_only = initial.is_empty() && !l.active_debug_rejects.is_empty();
 
             if initial.is_empty() && l.active_debug_rejects.is_empty() {
+                clear_keyboard_passthrough(input);
                 l.session = None;
                 l.session_hwnd = None;
                 l.active_show_id = None;
@@ -688,12 +716,10 @@ fn dispatch_input(
                 l.overlay_session,
                 &initial,
                 &l.active_debug_rejects,
-                nav_render::OverlayRenderOpts {
-                    debug_connectors: debug_pill_connectors,
-                    ..Default::default()
-                },
+                hint_overlay_opts(debug_pill_connectors, nav_render::HintTooltipMode::Navigate),
             ) {
                 eprintln!("[render] show: {e}");
+                clear_keyboard_passthrough(input);
                 l.session = None;
                 l.session_hwnd = None;
                 l.active_show_id = None;
@@ -705,6 +731,7 @@ fn dispatch_input(
             l.active_show_id = Some(l.overlay_session);
             l.session = Some(sess);
             l.session_hwnd = Some(hwnd);
+            clear_keyboard_passthrough(input);
             input.hint_mode.store(true, Ordering::Release);
             eprintln!(
                 "[render] show_ok session_id={} pills={}",
@@ -717,12 +744,21 @@ fn dispatch_input(
                 return;
             }
             let Some(sid) = l.active_show_id else {
+                clear_keyboard_passthrough(input);
                 input.hint_mode.store(false, Ordering::Release);
                 return;
             };
 
+            if input.keyboard_passthrough.load(Ordering::Acquire) {
+                match sk {
+                    SessionKey::Escape => {}
+                    SessionKey::Char(_) | SessionKey::Backspace => return,
+                }
+            }
+
             if l.overlay_debug_only {
                 if matches!(sk, SessionKey::Escape) {
+                    clear_keyboard_passthrough(input);
                     input.hint_mode.store(false, Ordering::Release);
                     let _ = renderer.hide(sid);
                     l.active_show_id = None;
@@ -735,6 +771,7 @@ fn dispatch_input(
             }
 
             let Some(mut sess) = l.session.take() else {
+                clear_keyboard_passthrough(input);
                 input.hint_mode.store(false, Ordering::Release);
                 let _ = renderer.hide(sid);
                 l.active_show_id = None;
@@ -757,16 +794,17 @@ fn dispatch_input(
                         sid,
                         &visible,
                         &l.active_debug_rejects,
-                        nav_render::OverlayRenderOpts {
-                            debug_connectors: debug_pill_connectors,
-                            ..Default::default()
-                        },
+                        hint_overlay_opts(
+                            debug_pill_connectors,
+                            nav_render::HintTooltipMode::Navigate,
+                        ),
                     ) {
                         eprintln!("[render] repaint: {e}");
                     }
                     l.session = Some(sess);
                 }
                 SessionEvent::Invoke(id) => {
+                    clear_keyboard_passthrough(input);
                     let hwnd = l.session_hwnd.take();
                     let hint = sess.hints().get(id.0 as usize).cloned();
                     input.hint_mode.store(false, Ordering::Release);
@@ -782,6 +820,7 @@ fn dispatch_input(
                     }
                 }
                 SessionEvent::Done => {
+                    clear_keyboard_passthrough(input);
                     input.hint_mode.store(false, Ordering::Release);
                     let _ = renderer.hide(sid);
                     l.active_show_id = None;

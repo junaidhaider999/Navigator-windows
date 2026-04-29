@@ -11,12 +11,12 @@ RUN
 ---
 1. Double-click navigator.exe (one copy stays running; check the system tray).
 2. Click into any normal window (Notepad, File Explorer, a browser, …).
-3. Press Alt+/ to show hints. Type the letters on a target to narrow and
-   activate it.
-4. Press Esc, or press Alt+/ again, to cancel.
+3. Press / (forward slash) to show hints — that is the default hotkey. Type the
+   letters on a target to narrow and activate it.
+4. Press / again while hints are showing to type normally in the focused window
+   (hint letters are ignored until you press Esc). Press Esc to cancel hints.
 
-Plain "/" may also open hints when you are not typing in a text field — see the
-project README on GitHub for details.
+You can change the hotkey in %APPDATA%\Navigator\config.toml under [hotkey].
 
 
 FILES IN THIS FOLDER
