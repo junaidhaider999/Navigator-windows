@@ -19,8 +19,10 @@ pub enum FallbackPolicy {
 /// keyboard-focusable + common control types (more candidates, slower on large trees).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum EnumerationProfile {
-    #[default]
     Fast,
+    /// Default: explicit patterns OR (keyboard-focusable AND interactive control type) — broader
+    /// match catches invokables without explicit patterns (web buttons, Electron, Custom).
+    #[default]
     Full,
 }
 

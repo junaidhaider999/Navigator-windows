@@ -9,6 +9,8 @@ fn main() -> std::process::ExitCode {
 #[cfg(windows)]
 mod logging;
 #[cfg(windows)]
+mod prefetch;
+#[cfg(windows)]
 mod single_instance;
 #[cfg(windows)]
 mod tray;
@@ -128,10 +130,10 @@ fn main() -> std::process::ExitCode {
         eprintln!("render prewarm: {e}");
     }
 
-    let enum_opts = build_enum_opts(&cfg, &cli_snap);
+    let enum_opts_shared: Arc<Mutex<nav_uia::EnumOptions>> =
+        Arc::new(Mutex::new(build_enum_opts(&cfg, &cli_snap)));
     let app = Arc::new(Mutex::new(AppState {
         alphabet,
-        enum_opts,
         hint_cache_ttl_ms: cfg.hints.hint_cache_ttl_ms,
         pipeline_soft_budget_ms: cfg.hints.pipeline_soft_budget_ms as f64,
         pipeline_hard_budget_ms: cfg.hints.pipeline_hard_budget_ms as f64,
@@ -139,6 +141,25 @@ fn main() -> std::process::ExitCode {
         hint_cache: None,
     }));
     let last_focus: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
+
+    // Background foreground-window prefetcher: keeps `AppState.hint_cache` warm so repeat
+    // hotkeys on a dwell window hit `cache_hit` and skip the ~10–25 ms UIA enumerate.
+    // Failure to spawn is non-fatal: we fall back to a `never()` receiver and lose only the
+    // warm-cache speed-up.
+    let _prefetcher: Option<prefetch::Prefetcher>;
+    let prefetch_rx: crossbeam_channel::Receiver<prefetch::CachedEnumeration> =
+        match prefetch::Prefetcher::spawn(enum_opts_shared.clone()) {
+            Ok(p) => {
+                let rx = p.rx.clone();
+                _prefetcher = Some(p);
+                rx
+            }
+            Err(e) => {
+                eprintln!("[prefetch] spawn failed: {e}; continuing without prefetch");
+                _prefetcher = None;
+                crossbeam_channel::never()
+            }
+        };
 
     let debug_pill_connectors = cli.debug_overlay;
 
@@ -168,9 +189,9 @@ fn main() -> std::process::ExitCode {
                 return;
             }
             let opts = build_enum_opts(&c, &cli_snap);
+            *enum_opts_shared.lock().expect("enum_opts") = opts;
             *app.lock().expect("state") = AppState {
                 alphabet: alph,
-                enum_opts: opts,
                 hint_cache_ttl_ms: c.hints.hint_cache_ttl_ms,
                 pipeline_soft_budget_ms: c.hints.pipeline_soft_budget_ms as f64,
                 pipeline_hard_budget_ms: c.hints.pipeline_hard_budget_ms as f64,
@@ -190,19 +211,28 @@ fn main() -> std::process::ExitCode {
 
     loop {
         if cli.no_tray {
-            while let Ok(ev) = rx.recv() {
-                dispatch_input(
-                    ev,
-                    &mut l,
-                    &input,
-                    &uia,
-                    &renderer,
-                    &app,
-                    &last_focus,
-                    debug_pill_connectors,
-                );
+            select! {
+                recv(rx) -> ev => {
+                    let Ok(ev) = ev else { break };
+                    dispatch_input(
+                        ev,
+                        &mut l,
+                        &input,
+                        &uia,
+                        &renderer,
+                        &app,
+                        &enum_opts_shared,
+                        &last_focus,
+                        debug_pill_connectors,
+                    );
+                }
+                recv(prefetch_rx) -> pe => {
+                    if let Ok(entry) = pe {
+                        absorb_prefetch(&app, entry);
+                    }
+                }
             }
-            break;
+            continue;
         }
 
         select! {
@@ -215,9 +245,15 @@ fn main() -> std::process::ExitCode {
                     &uia,
                     &renderer,
                     &app,
+                    &enum_opts_shared,
                     &last_focus,
                     debug_pill_connectors,
                 );
+            }
+            recv(prefetch_rx) -> pe => {
+                if let Ok(entry) = pe {
+                    absorb_prefetch(&app, entry);
+                }
             }
             recv(tray_rx) -> te => {
                 let Ok(te) = te else { break };
@@ -269,26 +305,20 @@ struct CliSnapshot {
     debug_overlay: bool,
 }
 
-#[cfg(windows)]
-struct HintSessionCache {
-    hwnd: usize,
-    pid: u32,
-    title_fp: u64,
-    rect_ltrb: (i32, i32, i32, i32),
-    raws_deduped: Vec<nav_core::RawHint>,
-    debug_rejects: Vec<nav_core::UiaDebugReject>,
-    at: std::time::Instant,
-}
+// `HintSessionCache` was unified with `prefetch::CachedEnumeration` so the background
+// prefetcher and the synchronous hotkey path share the same on-disk layout. Locking the
+// AppState mutex now only blocks on rendering-loop concerns; `EnumOptions` lives in its
+// own small mutex (see `enum_opts: Arc<Mutex<EnumOptions>>`) so the prefetch thread can
+// snapshot it without contending with planner state.
 
 #[cfg(windows)]
 struct AppState {
     alphabet: Vec<char>,
-    enum_opts: nav_uia::EnumOptions,
     hint_cache_ttl_ms: u64,
     pipeline_soft_budget_ms: f64,
     pipeline_hard_budget_ms: f64,
     planner_label_cap: usize,
-    hint_cache: Option<HintSessionCache>,
+    hint_cache: Option<prefetch::CachedEnumeration>,
 }
 
 #[cfg(windows)]
@@ -350,11 +380,6 @@ fn hint_overlay_opts(
 }
 
 #[cfg(windows)]
-fn clear_keyboard_passthrough(input: &nav_input::InputThread) {
-    use std::sync::atomic::Ordering;
-    input.keyboard_passthrough.store(false, Ordering::Release);
-}
-
 #[cfg(windows)]
 fn open_config_folder() {
     use std::os::windows::ffi::OsStrExt;
@@ -411,6 +436,26 @@ fn show_about_dialog() {
     }
 }
 
+/// Move a prefetched enumeration into `AppState.hint_cache` **only** if it would replace
+/// either nothing or an older entry. Never clobbers a fresher live-hotkey cache fill.
+#[cfg(windows)]
+fn absorb_prefetch(
+    app: &std::sync::Arc<std::sync::Mutex<AppState>>,
+    entry: prefetch::CachedEnumeration,
+) {
+    let mut st = match app.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    let take = match &st.hint_cache {
+        Some(existing) => entry.at >= existing.at,
+        None => true,
+    };
+    if take {
+        st.hint_cache = Some(entry);
+    }
+}
+
 #[cfg(windows)]
 #[allow(clippy::too_many_arguments)]
 fn dispatch_input(
@@ -420,6 +465,7 @@ fn dispatch_input(
     uia: &nav_uia::UiaRuntime,
     renderer: &nav_render::Renderer,
     app: &std::sync::Arc<std::sync::Mutex<AppState>>,
+    enum_opts_shared: &std::sync::Arc<std::sync::Mutex<nav_uia::EnumOptions>>,
     last_focus: &std::sync::Arc<std::sync::Mutex<Option<usize>>>,
     debug_pill_connectors: bool,
 ) {
@@ -432,27 +478,18 @@ fn dispatch_input(
     match ev {
         nav_input::InputEvent::Hotkey(p) => {
             println!(
-                "[input] hotkey captured_hwnd=0x{:x} latency_us={} plain_slash={}",
-                p.captured_hwnd, p.latency_us, p.from_plain_slash
+                "[input] hotkey captured_hwnd=0x{:x} latency_us={}",
+                p.captured_hwnd, p.latency_us
             );
 
             if input.hint_mode.load(Ordering::Acquire) {
-                if input.keyboard_passthrough.load(Ordering::Acquire) {
-                    return;
-                }
-                input.keyboard_passthrough.store(true, Ordering::Release);
-                println!("[input] hint editing mode (typing goes to app; Esc closes hints)");
-                if let (Some(sid), Some(sess)) = (l.active_show_id, l.session.as_ref()) {
-                    let visible = sess.visible_hints();
-                    let _ = renderer.repaint(
-                        sid,
-                        &visible,
-                        &l.active_debug_rejects,
-                        hint_overlay_opts(
-                            debug_pill_connectors,
-                            nav_render::HintTooltipMode::TypeInApp,
-                        ),
-                    );
+                input.hint_mode.store(false, Ordering::Release);
+                l.session = None;
+                l.session_hwnd = None;
+                l.active_debug_rejects.clear();
+                l.overlay_debug_only = false;
+                if let Some(sid) = l.active_show_id.take() {
+                    let _ = renderer.hide(sid);
                 }
                 return;
             }
@@ -470,8 +507,6 @@ fn dispatch_input(
             if let Some(prev) = l.active_show_id {
                 let _ = renderer.hide(prev);
             }
-            clear_keyboard_passthrough(input);
-
             let mut freq = 0i64;
             if unsafe { QueryPerformanceFrequency(&mut freq) }.is_err() {
                 eprintln!("[uia] QueryPerformanceFrequency failed");
@@ -516,7 +551,7 @@ fn dispatch_input(
                 eprintln!("[dedupe] cache_hit=1 dedupe_ms=0.00");
                 (raws_deduped, dbg)
             } else {
-                let enum_opts = app.lock().expect("state").enum_opts.clone();
+                let enum_opts = enum_opts_shared.lock().expect("enum_opts").clone();
                 let enum_res = uia.enumerate(hwnd, &enum_opts);
 
                 let mut t1 = 0i64;
@@ -604,7 +639,7 @@ fn dispatch_input(
 
                 {
                     let mut st = app.lock().expect("state");
-                    st.hint_cache = Some(HintSessionCache {
+                    st.hint_cache = Some(prefetch::CachedEnumeration {
                         hwnd: p.captured_hwnd,
                         pid: probe.pid,
                         title_fp: cache_key.0,
@@ -705,7 +740,6 @@ fn dispatch_input(
             l.overlay_debug_only = initial.is_empty() && !l.active_debug_rejects.is_empty();
 
             if initial.is_empty() && l.active_debug_rejects.is_empty() {
-                clear_keyboard_passthrough(input);
                 l.session = None;
                 l.session_hwnd = None;
                 l.active_show_id = None;
@@ -721,7 +755,6 @@ fn dispatch_input(
                 hint_overlay_opts(debug_pill_connectors, nav_render::HintTooltipMode::Navigate),
             ) {
                 eprintln!("[render] show: {e}");
-                clear_keyboard_passthrough(input);
                 l.session = None;
                 l.session_hwnd = None;
                 l.active_show_id = None;
@@ -733,7 +766,6 @@ fn dispatch_input(
             l.active_show_id = Some(l.overlay_session);
             l.session = Some(sess);
             l.session_hwnd = Some(hwnd);
-            clear_keyboard_passthrough(input);
             input.hint_mode.store(true, Ordering::Release);
             eprintln!(
                 "[render] show_ok session_id={} pills={}",
@@ -746,21 +778,12 @@ fn dispatch_input(
                 return;
             }
             let Some(sid) = l.active_show_id else {
-                clear_keyboard_passthrough(input);
                 input.hint_mode.store(false, Ordering::Release);
                 return;
             };
 
-            if input.keyboard_passthrough.load(Ordering::Acquire) {
-                match sk {
-                    SessionKey::Escape => {}
-                    SessionKey::Char(_) | SessionKey::Backspace => return,
-                }
-            }
-
             if l.overlay_debug_only {
                 if matches!(sk, SessionKey::Escape) {
-                    clear_keyboard_passthrough(input);
                     input.hint_mode.store(false, Ordering::Release);
                     let _ = renderer.hide(sid);
                     l.active_show_id = None;
@@ -773,7 +796,6 @@ fn dispatch_input(
             }
 
             let Some(mut sess) = l.session.take() else {
-                clear_keyboard_passthrough(input);
                 input.hint_mode.store(false, Ordering::Release);
                 let _ = renderer.hide(sid);
                 l.active_show_id = None;
@@ -806,7 +828,6 @@ fn dispatch_input(
                     l.session = Some(sess);
                 }
                 SessionEvent::Invoke(id) => {
-                    clear_keyboard_passthrough(input);
                     let hwnd = l.session_hwnd.take();
                     let hint = sess.hints().get(id.0 as usize).cloned();
                     input.hint_mode.store(false, Ordering::Release);
@@ -815,14 +836,13 @@ fn dispatch_input(
                     l.active_debug_rejects.clear();
                     l.overlay_debug_only = false;
                     if let (Some(hwnd), Some(h)) = (hwnd, hint) {
-                        let enum_opts = app.lock().expect("state").enum_opts.clone();
+                        let enum_opts = enum_opts_shared.lock().expect("enum_opts").clone();
                         if let Err(e) = uia.invoke(hwnd, &h, &enum_opts) {
                             eprintln!("[uia] invoke: {e}");
                         }
                     }
                 }
                 SessionEvent::Done => {
-                    clear_keyboard_passthrough(input);
                     input.hint_mode.store(false, Ordering::Release);
                     let _ = renderer.hide(sid);
                     l.active_show_id = None;

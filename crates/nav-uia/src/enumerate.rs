@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use nav_core::{
     Backend, ElementKind, NavEnumerateResult, RawHint, Rect, UiaCoverageStats, UiaDebugReject,
-    UiaEnumerateBasis, UiaEnumerateTimingsMs, fnv1a_hash_i32_slice,
+    UiaEnumerateBasis, UiaEnumerateTimingsMs,
 };
 use rayon::prelude::*;
 use windows::Win32::Foundation::{HWND, POINT, RECT, RPC_E_CHANGED_MODE};
@@ -410,6 +410,8 @@ unsafe fn uia_runtime_id_fingerprint(el: &IUIAutomationElement) -> Option<u64> {
     }
 }
 
+/// Inline FNV-1a hash of the `RuntimeId` `SAFEARRAY` — avoids a per-element heap allocation
+/// (`Vec::with_capacity` + free) that adds up to tens of KB / 2000 nodes / enumeration.
 unsafe fn runtime_id_from_safearray(psa: *mut SAFEARRAY) -> Option<u64> {
     unsafe {
         let l = SafeArrayGetLBound(psa, 1).ok()? as i32;
@@ -417,13 +419,16 @@ unsafe fn runtime_id_from_safearray(psa: *mut SAFEARRAY) -> Option<u64> {
         if u < l {
             return None;
         }
-        let mut parts = Vec::with_capacity((u - l + 1) as usize);
+        let mut h: u64 = 14695981039346656037;
         for idx in l..=u {
             let mut v: i32 = 0;
             SafeArrayGetElement(psa, &idx, &mut v as *mut i32 as *mut c_void).ok()?;
-            parts.push(v);
+            for b in v.to_le_bytes() {
+                h ^= u64::from(b);
+                h = h.wrapping_mul(1099511628211);
+            }
         }
-        Some(fnv1a_hash_i32_slice(&parts))
+        Some(h)
     }
 }
 
@@ -436,14 +441,24 @@ fn try_element_bounds(el: &IUIAutomationElement, from_cache: bool) -> Option<Rec
     rect_from_uia_bounds(r)
 }
 
-fn rect_center_inside_hwnd(rect: &Rect, root: HWND) -> bool {
+/// Resolves the **screen-space window rect** of `root` once (cheap GDI call).
+/// `None` means "accept all rects" (root invalid or query failed).
+fn hwnd_screen_rect(root: HWND) -> Option<RECT> {
     if root.is_invalid() {
-        return true;
+        return None;
     }
     let mut wr = RECT::default();
     if unsafe { GetWindowRect(root, &mut wr) }.is_err() {
-        return true;
+        return None;
     }
+    Some(wr)
+}
+
+#[inline]
+fn rect_center_inside_root(rect: &Rect, root_rect: Option<&RECT>) -> bool {
+    let Some(wr) = root_rect else {
+        return true;
+    };
     let cx = rect.x + rect.w / 2;
     let cy = rect.y + rect.h / 2;
     cx >= wr.left && cx < wr.right && cy >= wr.top && cy < wr.bottom
@@ -498,7 +513,13 @@ fn collect_from_descendants_array(
     if let Some(c) = coverage.as_mut() {
         c.raw_nodes = len as usize;
     }
-    let mut out = Vec::new();
+    // Pre-size to expected lower bound of survivors; ~half of raw nodes after filters is typical.
+    let estimated_cap = opts.max_elements.min((len as usize).saturating_add(1) / 2 + 16);
+    let mut out: Vec<RawHint> = Vec::with_capacity(estimated_cap);
+    // Cache the session-root window rect **once**: `rect_center_inside_root` was previously
+    // calling `GetWindowRect` per element (n GDI syscalls). One call is enough — the root
+    // window cannot move during this enumeration pass.
+    let root_rect = hwnd_screen_rect(session_root);
     let budget = opts.materialize_hard_budget_ms;
     let mat_start = Instant::now();
 
@@ -607,8 +628,10 @@ fn collect_from_descendants_array(
             unsafe { el.CurrentBoundingRectangle() }
         };
         let rect = match bounds {
+            // Threshold lowered 6→4 px to catch tiny interactive glyphs (close-buttons in tabs,
+            // dot indicators, scrollbar arrows, custom toolbar tools) that real apps surface.
             Ok(r) => match rect_from_uia_bounds(r) {
-                Some(r) if r.w >= 6 && r.h >= 6 => r,
+                Some(r) if r.w >= 4 && r.h >= 4 => r,
                 Some(_) => {
                     push_reject(reject_sink, opts, "tiny_rect", None);
                     continue;
@@ -630,7 +653,7 @@ fn collect_from_descendants_array(
             }
         };
 
-        if !rect_center_inside_hwnd(&rect, session_root) {
+        if !rect_center_inside_root(&rect, root_rect.as_ref()) {
             if opts.debug_uia {
                 eprintln!(
                     "[uia-debug] skip idx={i} reason=outside_root_window bounds=({},{} {}x{})",

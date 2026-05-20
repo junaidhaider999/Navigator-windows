@@ -61,7 +61,10 @@ fn default_max_elements() -> usize {
 }
 
 fn default_enumeration_profile() -> String {
-    "fast".to_string()
+    // `full` includes keyboard-focusable + common control types in the FindAll match,
+    // catching invokables that lack explicit Invoke/Toggle/etc. patterns (web buttons,
+    // Electron, many Custom controls). Coverage > raw latency for typical desktop trees.
+    "full".to_string()
 }
 
 fn default_materialize_budget_ms() -> u64 {
@@ -136,12 +139,12 @@ impl Default for HintsConfig {
 }
 
 fn default_hotkey_chord() -> String {
-    "/".to_string()
+    "alt+/".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HotkeyConfig {
-    /// e.g. `/`, `slash`, `alt+/`, `ctrl+shift+a` (parsed by `nav-input`; `/` is hook-only).
+    /// e.g. `alt+/`, `ctrl+shift+a` (parsed by `nav-input` via `RegisterHotKey`).
     #[serde(default = "default_hotkey_chord")]
     pub chord: String,
 }
