@@ -59,7 +59,8 @@ pub(crate) fn ensure_com_apartment() {
     });
 }
 
-/// Returns `true` when plain `/` must be passed through to the focused app (Navigator stays closed).
+/// Reserved for a possible future plain-key activator; unused while activation uses `RegisterHotKey` chords.
+#[allow(dead_code)]
 pub(crate) fn focused_control_suppresses_plain_slash_hotkey() -> bool {
     ensure_com_apartment();
     if suppress_for_terminal_context() {

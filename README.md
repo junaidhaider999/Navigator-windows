@@ -1,4 +1,4 @@
-# Navigator v1.1
+# Navigator v1.2
 
 Press a hotkey. Hints appear. Type letters. Act.
 
@@ -30,10 +30,10 @@ Thank you, **zsims**, for the concept and the reference implementation.
 
 1. Run **`navigator.exe`** (see **Build**).
 2. Focus a normal window (e.g. Notepad or Explorer).
-3. Press **`/`** (default hotkey) to open hints. You can set a different chord in `config.toml` under **`[hotkey].chord`** (e.g. `alt+/`).
+3. Press **`Alt+/`** (default hotkey) to open hints. You can set a different chord in `config.toml` under **`[hotkey].chord`** (must include a modifier, e.g. `ctrl+shift+a`).
 4. Type the shown letters to filter, then activate the target.
 
-Press **`/`** again while hints are visible to **type in the focused app** (including another **`/`**); hint letters are ignored until you press **Esc**. **Esc** closes the overlay (same as canceling from normal hint mode).
+Press **`Alt+/`** again or **Esc** to close the overlay.
 
 ## Build
 

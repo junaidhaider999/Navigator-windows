@@ -9,7 +9,6 @@ use crate::{InputError, InputEvent};
 
 pub struct InputThread {
     pub hint_mode: Arc<AtomicBool>,
-    pub keyboard_passthrough: Arc<AtomicBool>,
 }
 
 impl InputThread {

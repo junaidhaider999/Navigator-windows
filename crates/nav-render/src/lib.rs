@@ -29,10 +29,8 @@ pub enum HintTooltipMode {
     /// No footer hint (e.g. prewarm / internal defaults).
     #[default]
     Hidden,
-    /// Hints are filtering; second activation enters type-in-app mode.
+    /// Hints active; Alt+/ again or Esc closes the overlay.
     Navigate,
-    /// Keys go to the focused app until Esc closes the overlay.
-    TypeInApp,
 }
 
 #[cfg(windows)]

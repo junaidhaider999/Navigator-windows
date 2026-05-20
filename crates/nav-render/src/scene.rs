@@ -792,10 +792,7 @@ pub unsafe fn draw_pills(
 pub fn hint_tooltip_text(mode: HintTooltipMode) -> Option<&'static str> {
     match mode {
         HintTooltipMode::Hidden => None,
-        HintTooltipMode::Navigate => {
-            Some("Press the activation key again to type here · Esc closes hints")
-        }
-        HintTooltipMode::TypeInApp => Some("Typing goes to the app · Esc closes hints"),
+        HintTooltipMode::Navigate => Some("Alt+/ again or Esc to close hints"),
     }
 }
 
@@ -1035,14 +1032,7 @@ mod tests {
     #[test]
     fn hint_tooltip_text_matches_mode() {
         assert!(hint_tooltip_text(HintTooltipMode::Hidden).is_none());
-        assert!(
-            hint_tooltip_text(HintTooltipMode::Navigate)
-                .is_some_and(|s| s.contains("activation key"))
-        );
-        assert!(
-            hint_tooltip_text(HintTooltipMode::TypeInApp)
-                .is_some_and(|s| s.contains("Typing goes"))
-        );
+        assert!(hint_tooltip_text(HintTooltipMode::Navigate).is_some_and(|s| s.contains("Alt+/")));
     }
 
     fn hint_at(label: &str, element_id: u64, x: i32, y: i32, w: i32, h: i32) -> Hint {
