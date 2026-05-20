@@ -15,7 +15,7 @@ $Us = Join-Path $Root 'user-space'
 Copy-Item (Join-Path $Root 'target/release/navigator.exe') (Join-Path $Us 'navigator.exe') -Force
 
 $TomlLines = Get-Content (Join-Path $Root 'Cargo.toml')
-$Ver = '1.1.0'
+$Ver = '1.2.0'
 for ($i = 0; $i -lt $TomlLines.Length; $i++) {
     if ($TomlLines[$i] -match '^\[workspace\.package\]') {
         for ($j = $i + 1; $j -lt $TomlLines.Length; $j++) {
